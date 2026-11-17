@@ -341,15 +341,11 @@ def main():
     ass = make_karaoke_ass(durations)
     total = sum(durations)
     music = make_music(total)
-    siren = make_siren(total)
-    # Police siren accents only around the real-life police section.
-    police_start = sum(durations[:5])
     run(["ffmpeg","-y","-i",str(OUTPUT_DIR/"video.mp4"),"-i",str(OUTPUT_DIR/"voice.mp3"),
-         "-i",str(music),"-i",str(siren),
+         "-i",str(music),
          "-filter_complex",
          f"[2:a]volume=0.20,afade=t=in:st=0:d=1,afade=t=out:st={max(0,total-2):.2f}:d=2[m];"
-         f"[3:a]atrim=0:4,adelay={int(police_start*1000)}|{int(police_start*1000)},volume=0.22[s];"
-         "[1:a]volume=1.0[v];[m][s][v]amix=inputs=3:duration=first:dropout_transition=2,alimiter=limit=0.95[a]",
+         "[1:a]volume=1.0[v];[m][v]amix=inputs=2:duration=first:dropout_transition=2,alimiter=limit=0.95[a]",
          "-vf",f"ass={ass.as_posix()}","-map","0:v:0","-map","[a]",
          "-c:v","libx264","-preset","veryfast","-crf","21","-c:a","aac","-b:a","192k",
          "-shortest","-movflags","+faststart",str(FINAL_VIDEO)])
