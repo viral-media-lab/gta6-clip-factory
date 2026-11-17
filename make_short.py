@@ -73,25 +73,35 @@ def download_game():
     raise RuntimeError("No GTA VI footage available")
 
 async def make_voice():
-    # Voice redesign is intentionally deferred; keep one consistent provider for this run.
+    # Voice work is deferred; if Edge fails, regenerate EVERY line with one fallback voice.
     audio_dir = OUTPUT_DIR / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
-    paths = []
-    for i, phrase in enumerate(SCRIPT):
-        path = audio_dir / f"{i:02}.mp3"
-        try:
+    paths = [audio_dir / f"{i:02}.mp3" for i in range(len(SCRIPT))]
+    provider = "edge"
+
+    async def generate_edge():
+        for path, phrase in zip(paths, SCRIPT):
             tts = edge_tts.Communicate(phrase, "ru-RU-DmitryNeural", rate="+15%", pitch="-8Hz")
             await asyncio.wait_for(tts.save(str(path)), timeout=45)
             if not path.exists() or path.stat().st_size < 1000:
                 raise RuntimeError("Empty Edge TTS result")
-        except Exception as exc:
-            # Do not mix a different Google voice into the same video.
-            raise RuntimeError(f"Edge TTS failed on line {i + 1}; stopped to avoid mixed voices: {exc}")
-        paths.append(path)
+
+    try:
+        await generate_edge()
+    except Exception as exc:
+        print("Edge TTS unavailable; regenerating the FULL narration with one fallback voice:", exc)
+        provider = "google-fallback"
+        for path in paths:
+            path.unlink(missing_ok=True)
+        for path, phrase in zip(paths, SCRIPT):
+            gTTS(text=phrase, lang="ru", slow=False).save(str(path))
+
+    durations = [probe_duration(p) for p in paths]
     concat = OUTPUT_DIR / "audio_list.txt"
-    concat.write_text("".join(f"file '{p.as_posix()}'\n" for p in paths), encoding="utf-8")
+    concat.write_text("".join(f"file '{p.as_posix()}'\\n" for p in paths), encoding="utf-8")
     run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat), "-c:a", "libmp3lame", str(OUTPUT_DIR / "voice.mp3")])
-    return [probe_duration(p) for p in paths]
+    print("Narration provider:", provider)
+    return durations
 
 def get_bodycam():
     exts = {".mp4", ".mov", ".mkv", ".webm", ".ogv"}
