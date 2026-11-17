@@ -5,10 +5,14 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: gta6-short-main
+  cancel-in-progress: true
+
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
 
     steps:
       - name: Checkout project
