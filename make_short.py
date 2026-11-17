@@ -1,48 +1,108 @@
 
+import os
+import re
+import json
+import random
 import asyncio
 import subprocess
-import textwrap
+import urllib.request
 from pathlib import Path
 
 import edge_tts
 
 ROOT = Path(__file__).parent
-GAME = ROOT / "assets" / "game"
-BODYCAM = ROOT / "assets" / "bodycam"
-OUT = ROOT / "output"
-WORK = OUT / "work"
+GAME_DIR = ROOT / "assets/game"
+BODYCAM_DIR = ROOT / "assets/bodycam"
+OUTPUT_DIR = ROOT / "output"
 
-# Официальный Trailer 2 на канале PlayStation
-VIDEO_URL = "https://www.youtube.com/watch?v=l6RRdTFuepk"
-SOURCE = GAME / "extended_look.mp4"
+GAME_VIDEO = GAME_DIR / "gta6.mp4"
+FINAL_VIDEO = OUTPUT_DIR / "gta6_short.mp4"
 
-VOICE = "ru-RU-DmitryNeural"
-RATE = "+15%"
-PITCH = "-8Hz"
-
-# Таймкоды внутри ролика длительностью 2:47
-SCENE_STARTS = [4, 17, 31, 45, 59, 74, 89, 105, 123, 145]
+# Прямые источники видео. Если источник недоступен,
+# скрипт попробует следующий.
+GAME_URLS = [
+    "https://media-rockstargames-com.akamaized.net/VI/downloads/videos/GTAVI_An_Extended_Look/GTAVI_An_Extended_Look.mp4",
+]
 
 SCRIPT = [
     "БЛЯТЬ, В GTA 6 КОПЫ НЕ ПРОСТО ПОТЕРЯЮТ ТЕБЯ. ОНИ ЗАПОМНЯТ, КТО ТЫ ТАКОЙ!",
-    "В старых частях можно было нарезать круги по району, переждать звёзды — и будто ничего не было.",
-    "А здесь у полиции будет целое досье: твоя одежда, машина, оружие, камеры и даже твой напарник.",
-    "И если ты просто нацепил кепку и очки — это ещё не значит, что тебя не узнают. Rockstar явно решила усложнить жизнь.",
-    "Придётся реально переодеться, сменить тачку или разделиться с Люсией. Это уже не побег, а работа над ошибками.",
-    "А теперь представь: ты вроде бы скрылся, а полиция всё ещё пытается понять, кто ты и куда делся.",
-    "То есть мало устроить беспредел — надо ещё грамотно замести за собой следы. Красота, блядь!",
-    "А пока ты пытаешься всё это провернуть, американские копы в реальности иногда выглядят так, будто сами застряли в GTA.",
-    "Rockstar, вы делаете криминальную песочницу или курс повышения квалификации для беглых?",
+    "В старых частях можно было нарезать круги по району и переждать звёзды.",
+    "А здесь полиция будет учитывать твою одежду, машину, оружие и камеры.",
+    "Нацепил кепку и очки? Брат, это уже не поможет.",
+    "Придётся менять тачку, переодеваться и заметать следы.",
+    "И самое смешное: реальные американские копы иногда выглядят так, будто сами застряли в GTA.",
+    "Погоня, сирены, полный хаос. Только это уже не игра, блядь!",
+    "Rockstar, вы делаете криминальную песочницу или курс побега от полиции?",
     "Короче, мало просто оторваться. Надо ещё не спалиться. Ты бы вывез?"
 ]
 
-
 def run(cmd):
-    print("RUN:", " ".join(map(str, cmd)))
     subprocess.run(cmd, check=True)
 
+def download_file(url, destination):
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0"}
+    )
+    with urllib.request.urlopen(request, timeout=90) as response:
+        with open(destination, "wb") as output:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
 
-def probe_duration(path):
+def download_game():
+    if GAME_VIDEO.exists() and GAME_VIDEO.stat().st_size > 10_000_000:
+        return
+
+    for url in GAME_URLS:
+        try:
+            print("Downloading GTA footage...")
+            download_file(url, GAME_VIDEO)
+            if GAME_VIDEO.stat().st_size > 10_000_000:
+                return
+        except Exception as error:
+            print("Source failed:", error)
+
+    raise RuntimeError("Could not download GTA footage.")
+
+def find_bodycam():
+    extensions = {".mp4", ".mov", ".mkv"}
+    return [
+        p for p in BODYCAM_DIR.iterdir()
+        if p.suffix.lower() in extensions
+    ]
+
+async def make_voice():
+    AUDIO_DIR = OUTPUT_DIR / "audio"
+    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+
+    files = []
+    for i, phrase in enumerate(SCRIPT):
+        path = AUDIO_DIR / f"{i:02}.mp3"
+        voice = edge_tts.Communicate(
+            phrase,
+            "ru-RU-DmitryNeural",
+            rate="+15%",
+            pitch="-8Hz"
+        )
+        await voice.save(str(path))
+        files.append(path)
+
+    with open(OUTPUT_DIR / "audio_list.txt", "w") as f:
+        for path in files:
+            f.write(f"file '{path.as_posix()}'\n")
+
+    run([
+        "ffmpeg", "-y",
+        "-f", "concat", "-safe", "0",
+        "-i", str(OUTPUT_DIR / "audio_list.txt"),
+        "-c:a", "libmp3lame",
+        str(OUTPUT_DIR / "voice.mp3")
+    ])
+
+def get_duration(path):
     result = subprocess.check_output([
         "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
@@ -51,266 +111,149 @@ def probe_duration(path):
     ])
     return float(result.decode().strip())
 
+def make_video():
+    bodycam = find_bodycam()
+    source_duration = get_duration(GAME_VIDEO)
+    voice_duration = get_duration(OUTPUT_DIR / "voice.mp3")
 
-def download_game_video():
-    if SOURCE.exists() and SOURCE.stat().st_size > 10_000_000:
-        print("Using existing game video.")
-        return
+    # Чередуем игровые сцены и реальные bodycam,
+    # если в папке есть подходящие видео.
+    scenes = []
+    scene_count = len(SCRIPT)
+    segment_duration = voice_duration / scene_count
 
-    GAME.mkdir(parents=True, exist_ok=True)
-    print("Downloading PlayStation Trailer 2...")
+    for i in range(scene_count):
+        if bodycam and i in (5, 6):
+            scenes.append(random.choice(bodycam))
+        else:
+            scenes.append(GAME_VIDEO)
 
-    run([
-        "yt-dlp",
-        "--no-playlist",
-        "--no-warnings",
-        "-f", "bv*[height<=1080]+ba/b[height<=1080]",
-        "--merge-output-format", "mp4",
-        "-o", str(SOURCE),
-        VIDEO_URL
-    ])
+    concat_file = OUTPUT_DIR / "scenes.txt"
 
-    if not SOURCE.exists():
-        raise RuntimeError("Video download finished but MP4 was not found.")
+    with open(concat_file, "w") as f:
+        for i, source in enumerate(scenes):
+            if source == GAME_VIDEO:
+                start = max(
+                    0,
+                    min(
+                        source_duration - segment_duration - 1,
+                        (source_duration - segment_duration) *
+                        i / max(1, scene_count - 1)
+                    )
+                )
+            else:
+                duration = get_duration(source)
+                start = random.uniform(
+                    0, max(0, duration - segment_duration - 0.5)
+                )
 
+            scene = OUTPUT_DIR / f"scene_{i}.mp4"
 
-async def make_voice(index, phrase):
-    path = WORK / f"voice_{index:02d}.mp3"
-    padded = WORK / f"voice_{index:02d}_padded.mp3"
+            run([
+                "ffmpeg", "-y",
+                "-ss", str(start),
+                "-i", str(source),
+                "-t", str(segment_duration),
+                "-vf",
+                "scale=1080:1920:force_original_aspect_ratio=increase,"
+                "crop=1080:1920,setsar=1",
+                "-r", "30",
+                "-an",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-pix_fmt", "yuv420p",
+                str(scene)
+            ])
 
-    print(f"Creating voice {index + 1}/{len(SCRIPT)}")
-
-    tts = edge_tts.Communicate(
-        phrase,
-        VOICE,
-        rate=RATE,
-        pitch=PITCH
-    )
-    await tts.save(str(path))
+            f.write(f"file '{scene.as_posix()}'\n")
 
     run([
         "ffmpeg", "-y",
-        "-i", str(path),
-        "-af", "apad=pad_dur=0.25",
-        "-c:a", "libmp3lame",
-        "-q:a", "3",
-        str(padded)
+        "-f", "concat", "-safe", "0",
+        "-i", str(concat_file),
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-pix_fmt", "yuv420p",
+        str(OUTPUT_DIR / "video.mp4")
     ])
 
-    return padded
+def make_subtitles():
+    duration = get_duration(OUTPUT_DIR / "voice.mp3")
+    segment = duration / len(SCRIPT)
 
+    def stamp(seconds):
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        seconds = seconds % 60
+        return f"{hours}:{minutes:02}:{seconds:05.2f}"
 
-def make_ass(durations):
-    header = """[Script Info]
-Title: GTA 6 Short
+    with open(OUTPUT_DIR / "captions.ass", "w", encoding="utf-8") as f:
+        f.write("""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
 PlayResY: 1920
-WrapStyle: 2
-ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans,66,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,1,6,2,2,65,65,280,1
+Style: Default,DejaVu Sans,66,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,1,5,2,2,65,65,260,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
+""")
 
-    def stamp(seconds):
-        h = int(seconds // 3600)
-        m = int((seconds % 3600) // 60)
-        s = seconds % 60
-        return f"{h}:{m:02d}:{s:05.2f}"
+        for i, phrase in enumerate(SCRIPT):
+            start = i * segment
+            end = (i + 1) * segment
+            words = phrase.split()
+            lines = []
+            current = ""
 
-    content = header
-    current = 0.0
+            for word in words:
+                if len(current) + len(word) > 25:
+                    lines.append(current)
+                    current = word
+                else:
+                    current = (current + " " + word).strip()
 
-    for phrase, duration in zip(SCRIPT, durations):
-        start = current + 0.02
-        end = current + duration - 0.03
+            if current:
+                lines.append(current)
 
-        lines = textwrap.wrap(phrase, width=27)
-        caption = r"\N".join(lines)
-        caption = caption.replace("{", "").replace("}", "")
-
-        content += (
-            f"Dialogue: 0,{stamp(start)},{stamp(end)},"
-            f"Default,,0,0,0,,{caption}\n"
-        )
-
-        current += duration
-
-    path = OUT / "captions.ass"
-    path.write_text(content, encoding="utf-8")
-    return path
-
-
-def find_bodycam():
-    extensions = {".mp4", ".mov", ".mkv", ".webm"}
-    return sorted(
-        p for p in BODYCAM.glob("*")
-        if p.suffix.lower() in extensions
-    )
-
-
-def make_video_segment(index, duration, source_duration, bodycam_files):
-    output = WORK / f"scene_{index:02d}.mp4"
-
-    # Если в папке есть bodycam-файлы,
-    # используем их в двух комедийных перебивках.
-    use_bodycam = index in (3, 7) and bool(bodycam_files)
-
-    if use_bodycam:
-        source = bodycam_files[(index // 4) % len(bodycam_files)]
-        print("BODYCAM INSERT:", source.name)
-
-        run([
-            "ffmpeg", "-y",
-            "-stream_loop", "-1",
-            "-i", str(source),
-            "-t", str(duration),
-            "-vf",
-            "scale=1080:1920:force_original_aspect_ratio=increase,"
-            "crop=1080:1920,fps=30,setsar=1",
-            "-an",
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "23",
-            str(output)
-        ])
-
-    else:
-        requested_start = SCENE_STARTS[index]
-
-        # Не позволяем таймкоду выйти за границы ролика.
-        max_start = max(0, source_duration - duration - 0.5)
-        start = min(requested_start, max_start)
-
-        print(f"GTA SCENE {index + 1}: {start:.1f}s")
-
-        run([
-            "ffmpeg", "-y",
-            "-ss", str(start),
-            "-i", str(SOURCE),
-            "-t", str(duration),
-            "-vf",
-            "scale=1080:1920:force_original_aspect_ratio=increase,"
-            "crop=1080:1920,fps=30,setsar=1,"
-            "eq=contrast=1.06:saturation=1.12",
-            "-an",
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "23",
-            str(output)
-        ])
-
-    return output
-
-
-async def main():
-    OUT.mkdir(exist_ok=True)
-    WORK.mkdir(exist_ok=True)
-    GAME.mkdir(parents=True, exist_ok=True)
-    BODYCAM.mkdir(parents=True, exist_ok=True)
-
-    print("\n=== GTA 6 CLIP FACTORY ===\n")
-
-    download_game_video()
-
-    source_duration = probe_duration(SOURCE)
-    print("SOURCE DURATION:", round(source_duration, 1), "seconds")
-
-    voice_files = []
-
-    for i, phrase in enumerate(SCRIPT):
-        voice_files.append(await make_voice(i, phrase))
-
-    durations = [probe_duration(p) for p in voice_files]
-
-    # Склеиваем реплики в одну аудиодорожку.
-    audio_list = WORK / "audio_list.txt"
-    audio_list.write_text(
-        "".join(f"file '{p.resolve()}'\n" for p in voice_files),
-        encoding="utf-8"
-    )
-
-    narration = OUT / "narration.mp3"
-
-    run([
-        "ffmpeg", "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", str(audio_list),
-        "-c:a", "libmp3lame",
-        "-q:a", "2",
-        str(narration)
-    ])
-
-    bodycam_files = find_bodycam()
-
-    if not bodycam_files:
-        print("No bodycam files found. Using GTA footage only.")
-
-    video_files = []
-
-    for i, duration in enumerate(durations):
-        video_files.append(
-            make_video_segment(
-                i,
-                duration,
-                source_duration,
-                bodycam_files
+            text = r"\N".join(lines)
+            text = text.replace("{", r"\{").replace("}", r"\}")
+            f.write(
+                f"Dialogue: 0,{stamp(start)},{stamp(end)},"
+                f"Default,,0,0,0,,{text}\n"
             )
-        )
 
-    # Склеиваем все видеосцены.
-    video_list = WORK / "video_list.txt"
-    video_list.write_text(
-        "".join(f"file '{p.resolve()}'\n" for p in video_files),
-        encoding="utf-8"
-    )
+def main():
+    GAME_DIR.mkdir(parents=True, exist_ok=True)
+    BODYCAM_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    raw_video = WORK / "raw_video.mp4"
-
-    run([
-        "ffmpeg", "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", str(video_list),
-        "-c", "copy",
-        str(raw_video)
-    ])
-
-    captions = make_ass(durations)
-    final_video = OUT / "gta6_short.mp4"
-
-    print("\nRendering final video...")
+    print("=== GTA 6 CLIP FACTORY ===")
+    download_game()
+    asyncio.run(make_voice())
+    make_video()
+    make_subtitles()
 
     run([
         "ffmpeg", "-y",
-        "-i", str(raw_video),
-        "-i", str(narration),
-        "-vf",
-        f"subtitles={captions}:fontsdir=/usr/share/fonts/truetype/dejavu",
+        "-i", str(OUTPUT_DIR / "video.mp4"),
+        "-i", str(OUTPUT_DIR / "voice.mp3"),
+        "-vf", f"ass={OUTPUT_DIR / 'captions.ass'}",
         "-map", "0:v:0",
         "-map", "1:a:0",
         "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "21",
+        "-preset", "veryfast",
+        "-crf", "23",
         "-c:a", "aac",
         "-b:a", "192k",
         "-shortest",
-        "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
-        str(final_video)
+        str(FINAL_VIDEO)
     ])
 
-    print("\n================================")
-    print("VIDEO READY:", final_video)
-    print("DURATION:", round(probe_duration(final_video), 1), "seconds")
-    print("================================")
-
+    print("DONE:", FINAL_VIDEO)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
