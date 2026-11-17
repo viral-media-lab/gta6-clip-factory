@@ -1,5 +1,8 @@
 import json
+import os
 import subprocess
+import tempfile
+import atexit
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
@@ -16,15 +19,33 @@ VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 FRAME_DIR.mkdir(parents=True, exist_ok=True)
 results = []
 
+# Optional authenticated YouTube session supplied as a GitHub Actions secret.
+# Never print the cookie contents; remove the temporary file when the job exits.
+COOKIE_FILE = None
+cookie_text = os.environ.get("YT_COOKIES", "").strip()
+if cookie_text:
+    handle = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".txt", delete=False)
+    handle.write(cookie_text)
+    handle.close()
+    COOKIE_FILE = handle.name
+    atexit.register(lambda: Path(COOKIE_FILE).unlink(missing_ok=True))
+    print("YouTube cookies: configured", flush=True)
+else:
+    print("YouTube cookies: not configured; trying public access", flush=True)
+
 for index, url in enumerate(URLS, 1):
     output = VIDEO_DIR / f"ref_{index}.%(ext)s"
     cmd = [
         "yt-dlp", "--no-playlist", "--no-warnings",
+
         "-f", "bv*[height<=720]+ba/b[height<=720]",
         "--merge-output-format", "mp4",
         "--remux-video", "mp4",
-        "-o", str(output), url,
+        "-o", str(output),
     ]
+    if COOKIE_FILE:
+        cmd.extend(["--cookies", COOKIE_FILE])
+    cmd.append(url)
     print(f"\n===== REFERENCE {index}: {url} =====", flush=True)
     proc = subprocess.run(cmd, text=True, capture_output=True)
     print(proc.stdout[-5000:], flush=True)
