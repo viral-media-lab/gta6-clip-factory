@@ -354,7 +354,7 @@ def build_montage(durations):
             run(["ffmpeg","-y","-ss",f"{start:.3f}","-i",str(source),"-t",f"{dur:.3f}",
                  "-vf",vf,"-r",str(FPS),"-an","-c:v","libx264",
                  "-preset","ultrafast","-pix_fmt","yuv420p",str(out)])
-            listing.write(f"file '{out.as_posix()}'\\n")
+            listing.write(f"file '{out.as_posix()}'\n")
             timeline += dur
     run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(concat_list),
          "-c:v","copy",str(OUTPUT_DIR/"video.mp4")])
