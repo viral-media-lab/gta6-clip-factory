@@ -104,15 +104,15 @@ async def make_voice():
 def get_bodycam():
     exts = {".mp4", ".mov", ".mkv", ".webm", ".ogv"}
     files = [p for p in BODYCAM_DIR.glob("*") if p.suffix.lower() in exts and p.stat().st_size > 300_000]
-    # Avoid known fatal-incident footage: this project wants energetic, non-graphic pursuits.
     manifest_path = BODYCAM_DIR / "sources.json"
     if manifest_path.exists():
         try:
             records = json.loads(manifest_path.read_text(encoding="utf-8"))
-            safe = {r.get("file") for r in records if not re.search(r"death|killed|shooting|fatal|murder", (r.get("commons_title","") + " " + r.get("file","")).lower())}
+            safe = {r.get("file") for r in records if not re.search(r"death|killed|shooting|fatal|murder|gore", (r.get("title","") + " " + r.get("file","")).lower())}
             files = [p for p in files if p.name in safe]
-        except Exception:
-            pass
+        except Exception as exc:
+            print("Bodycam manifest unreadable:", exc)
+            return []
     return files
 
 def make_music(duration):
@@ -336,15 +336,17 @@ def get_meme_clips():
 
 
 def build_montage(durations, police_files=None):
-    # Real, openly licensed video inserts; no text cards or fabricated meme templates.
     proxy_video, scan_video = prepare_proxy_assets()
     shots = detect_game_shots(scan_video)
     meme_clips = get_meme_clips()
-    # Insertions land on the punchline, not randomly between unrelated lines.
-    meme_at = {3: 0.62, 4: 0.70, 6: 0.62, 7: 0.68}
-    scenes = []
-    shot_cursor = 0
-    meme_cursor = 0
+    police_files = police_files or []
+    if len(meme_clips) < 2:
+        raise RuntimeError(f"Only {len(meme_clips)} licensed meme clips found; refusing to render a meme-free Short")
+    if not police_files:
+        raise RuntimeError("No licensed real-life police clips found; refusing to silently replace them with GTA footage")
+    meme_at = {0: 0.85, 3: 0.75, 6: 0.75}
+    police_at = {4: 1.25, 5: 1.10}
+    scenes, shot_cursor, meme_cursor, police_cursor = [], 0, 0, 0
 
     def add_game_segments(phrase_i, total):
         nonlocal shot_cursor
@@ -352,78 +354,88 @@ def build_montage(durations, police_files=None):
         while left > 0.025:
             src_start, src_len = shots[shot_cursor % len(shots)]
             shot_cursor += 1
-            cut_dur = min(left, 3.0, max(0.55, src_len - 0.08))
+            cut_dur = min(left, 2.4, max(0.55, src_len - 0.08))
             usable = max(0.0, src_len - cut_dur - 0.08)
             offset = (shot_cursor * 0.37) % max(0.1, usable) if usable > 0.1 else 0.0
             scenes.append((proxy_video, src_start + offset, cut_dur, "game", phrase_i))
             left -= cut_dur
 
     for phrase_i, phrase_dur in enumerate(durations):
-        insert_dur = meme_at.get(phrase_i, 0.0)
-        if meme_clips and insert_dur and phrase_dur > insert_dur + 0.65:
-            lead = (phrase_dur - insert_dur) * 0.56
+        kind = "meme" if phrase_i in meme_at else ("police" if phrase_i in police_at else None)
+        insert_dur = meme_at.get(phrase_i, police_at.get(phrase_i, 0.0))
+        pool = meme_clips if kind == "meme" else police_files
+        if kind and pool and phrase_dur > insert_dur + 0.65:
+            lead = (phrase_dur - insert_dur) * 0.55
             tail = phrase_dur - insert_dur - lead
             add_game_segments(phrase_i, lead)
-            path, clip_len, title = meme_clips[meme_cursor % len(meme_clips)]
-            meme_cursor += 1
-            # Keep the excerpt short and varied; no clip is repeated until the pool cycles.
-            usable = max(0.0, clip_len - insert_dur - 0.1)
-            meme_start = ((meme_cursor * 1.73) % usable) if usable > 0.15 else 0.0
-            scenes.append((path, meme_start, min(insert_dur, clip_len), "meme", phrase_i))
-            print(f"Meme insert on line {phrase_i+1}: {title}")
+            if kind == "meme":
+                path, clip_len, title = meme_clips[meme_cursor % len(meme_clips)]
+                meme_cursor += 1
+                print(f"MEME_INSERT line={phrase_i+1} source={title}")
+            else:
+                path = police_files[police_cursor % len(police_files)]
+                police_cursor += 1
+                clip_len = probe_duration(path)
+                print(f"POLICE_INSERT line={phrase_i+1} file={path.name}")
+            actual_dur = min(insert_dur, max(0.5, clip_len - 0.1))
+            usable = max(0.0, clip_len - actual_dur - 0.1)
+            offset = ((meme_cursor + police_cursor) * 1.31) % usable if usable > 0.15 else 0.0
+            scenes.append((path, offset, actual_dur, kind, phrase_i))
             add_game_segments(phrase_i, tail)
         else:
             add_game_segments(phrase_i, phrase_dur)
 
     concat_list = OUTPUT_DIR / "video_parts.txt"
+    timeline, police_marks = 0.0, []
     with concat_list.open("w", encoding="utf-8") as listing:
         for n, (source, start, dur, kind, phrase_i) in enumerate(scenes):
+            if kind == "police":
+                police_marks.append((timeline, timeline + dur))
             out = OUTPUT_DIR / f"cut_{n:03}.mp4"
-            if kind == "meme":
-                vf = (
-                    "[0:v]split=2[bg][fg];"
-                    "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
-                    "crop=1080:1920,boxblur=24:12,eq=brightness=-0.18:saturation=1.15[back];"
-                    "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[front];"
-                    "[back][front]overlay=(W-w)/2:(H-h)/2,"
-                    "scale=1080:1920,setsar=1,eq=contrast=1.12:saturation=1.25,"
-                    "format=yuv420p"
-                )
-            else:
-                vf = (
-                    "[0:v]split=2[bg][fg];"
-                    "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
-                    "crop=1080:1920,boxblur=24:12,eq=brightness=-0.22:saturation=0.85[back];"
-                    "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[front];"
-                    "[back][front]overlay=(W-w)/2:(H-h)/2,"
-                    "eq=contrast=1.08:saturation=1.14,setsar=1,format=yuv420p"
-                )
+            vf = ("scale=1080:1920:force_original_aspect_ratio=increase,"
+                  "crop=1080:1920,setsar=1,eq=contrast=1.10:saturation=1.12,"
+                  "format=yuv420p")
             run(["ffmpeg","-y","-ss",f"{start:.3f}","-i",str(source),"-t",f"{dur:.3f}",
-                 "-filter_complex",vf,"-r",str(FPS),"-an","-c:v","libx264",
+                 "-vf",vf,"-r",str(FPS),"-an","-c:v","libx264",
                  "-preset","ultrafast","-pix_fmt","yuv420p",str(out)])
-            listing.write(f"file '{out.as_posix()}'\n")
+            listing.write(f"file '{out.as_posix()}'\\n")
+            timeline += dur
     run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(concat_list),
          "-c:v","copy",str(OUTPUT_DIR/"video.mp4")])
+    print(f"EDIT_AUDIT: memes={meme_cursor}, police={police_cursor}, police_sfx_marks={len(police_marks)}")
+    if meme_cursor < 2 or police_cursor < 1:
+        raise RuntimeError(f"Edit incomplete: memes={meme_cursor}, police={police_cursor}")
+    return police_marks
 
 
 def main():
     random.seed()
     for folder in (GAME_DIR, BODYCAM_DIR, OUTPUT_DIR, SFX_DIR, MUSIC_DIR):
         folder.mkdir(parents=True, exist_ok=True)
-    print("=== GTA6 SHORT FACTORY / EDITOR V3 ===")
+    print("=== GTA6 SHORT FACTORY / EDITOR V4 ===")
     download_game()
-    durations = asyncio.run(make_voice())
+    print("Running meme asset discovery...")
+    run(["python", str(ROOT / "meme_finder.py")])
+    print("Running licensed police-footage discovery...")
+    run(["python", str(ROOT / "bodycam_finder.py")])
     police = get_bodycam()
-    print(f"Optional real-life clips available: {len(police)} (not inserted unless explicitly mapped)")
-    build_montage(durations, police)
+    memes = get_meme_clips()
+    print(f"ASSET_GATE: memes={len(memes)}, police={len(police)}")
+    if len(memes) < 2 or len(police) < 1:
+        raise RuntimeError("Required edit assets missing; stopping before voice/render instead of producing a fake-complete video")
+    durations = asyncio.run(make_voice())
+    police_marks = build_montage(durations, police)
     ass = make_karaoke_ass(durations)
     total = sum(durations)
     music = make_music(total)
+    siren = make_siren(total)
+    siren_enable = "+".join(f"between(t,{a:.2f},{b:.2f})" for a,b in police_marks) or "0"
     run(["ffmpeg","-y","-i",str(OUTPUT_DIR/"video.mp4"),"-i",str(OUTPUT_DIR/"voice.mp3"),
-         "-i",str(music),
+         "-i",str(music),"-i",str(siren),
          "-filter_complex",
          f"[2:a]volume=0.20,afade=t=in:st=0:d=1,afade=t=out:st={max(0,total-2):.2f}:d=2[m];"
-         "[1:a]volume=1.0[v];[m][v]amix=inputs=2:duration=first:dropout_transition=2,alimiter=limit=0.95[a]",
+         f"[3:a]volume=0.62:enable='{siren_enable}'[s];"
+         "[1:a]volume=1.0[v];[m][s][v]amix=inputs=3:duration=first:dropout_transition=2,alimiter=limit=0.95[a]",
          "-vf",f"ass={ass.as_posix()}","-map","0:v:0","-map","[a]",
          "-c:v","libx264","-preset","ultrafast","-crf","23","-c:a","aac","-b:a","192k",
          "-shortest","-movflags","+faststart",str(FINAL_VIDEO)])
