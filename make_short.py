@@ -184,33 +184,6 @@ def find_font():
             return p
     return None
 
-def make_meme_card(index, text):
-    img = Image.new("RGB", (W, H), (15, 15, 18))
-    d = ImageDraw.Draw(img)
-    font_path = find_font()
-    font = ImageFont.truetype(font_path, 92) if font_path else ImageFont.load_default()
-    small = ImageFont.truetype(font_path, 42) if font_path else ImageFont.load_default()
-    d.rectangle((54, 400, W-54, 1500), outline=(255, 214, 0), width=12)
-    d.text((W//2, 530), "POV:", font=small, fill=(255, 214, 0), anchor="mm")
-    words = text.split()
-    lines, line = [], ""
-    for word in words:
-        test = (line + " " + word).strip()
-        if d.textbbox((0,0), test, font=font)[2] > W-180:
-            lines.append(line); line = word
-        else:
-            line = test
-    if line: lines.append(line)
-    y = 760
-    for ln in lines[:5]:
-        d.text((W//2+4, y+4), ln, font=font, fill=(0,0,0), anchor="mm", stroke_width=5, stroke_fill=(0,0,0))
-        d.text((W//2, y), ln, font=font, fill=(255,255,255), anchor="mm", stroke_width=2, stroke_fill=(0,0,0))
-        y += 130
-    d.text((W//2, 1380), "GTA 6 POLICE UPDATE", font=small, fill=(255,255,255), anchor="mm")
-    path = OUTPUT_DIR / f"meme_{index}.png"
-    img.save(path)
-    return path
-
 def make_karaoke_ass(durations):
     # Short caption beats; punch words get a larger yellow pop instead of flat karaoke.
     path = OUTPUT_DIR / "captions.ass"
