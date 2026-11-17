@@ -1,18 +1,24 @@
 
 import os
 import json
+import re
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 API_KEY = os.environ.get("YOUTUBE_API_KEY")
 
+# Темы, по которым ищем популярные видео
 QUERIES = [
     "GTA 6",
-    "Grand Theft Auto VI",
-    "GTA 6 funny moments",
-    "GTA 6 gameplay"
+    "GTA VI",
+    "GTA 6 новости",
+    "GTA 6 теория",
+    "GTA 6 reaction"
 ]
+
+DAYS_BACK = 30
+MAX_RESULTS = 50
 
 BASE_URL = "https://www.googleapis.com/youtube/v3/"
 
@@ -30,13 +36,68 @@ def youtube_request(endpoint, params):
         return json.loads(response.read().decode("utf-8"))
 
 
-def find_live_streams():
+def parse_duration(duration):
+    match = re.match(
+        r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?",
+        duration
+    )
+
+    if not match:
+        return 0
+
+    hours, minutes, seconds = match.groups()
+
+    return (
+        int(hours or 0) * 3600
+        + int(minutes or 0) * 60
+        + int(seconds or 0)
+    )
+
+
+def is_relevant(video):
+    snippet = video.get("snippet", {})
+
+    title = snippet.get("title", "").lower()
+    description = snippet.get("description", "").lower()
+
+    text = title + " " + description
+
+    keywords = [
+        "gta 6",
+        "gta6",
+        "gta vi",
+        "grand theft auto vi",
+        "гта 6",
+        "гта6"
+    ]
+
+    if not any(keyword in text for keyword in keywords):
+        return False
+
+    # Убираем явно посторонний контент
+    excluded = [
+        "roblox",
+        "minecraft",
+        "gta 6 in roblox"
+    ]
+
+    if any(word in title for word in excluded):
+        return False
+
+    return True
+
+
+def find_videos():
     if not API_KEY:
         raise RuntimeError("YOUTUBE_API_KEY is missing!")
 
+    published_after = (
+        datetime.now(timezone.utc) - timedelta(days=DAYS_BACK)
+    ).isoformat(timespec="seconds").replace("+00:00", "Z")
+
     video_ids = set()
 
-    print("Searching for GTA 6 live streams...")
+    print("Searching for popular GTA 6 videos...")
 
     for query in QUERIES:
         print(f"Searching: {query}")
@@ -45,76 +106,118 @@ def find_live_streams():
             "part": "snippet",
             "q": query,
             "type": "video",
-            "eventType": "live",
             "order": "viewCount",
-            "maxResults": 50
+            "publishedAfter": published_after,
+            "maxResults": MAX_RESULTS
         })
 
         for item in data.get("items", []):
-            video_ids.add(item["id"]["videoId"])
+            video_id = item.get("id", {}).get("videoId")
+
+            if video_id:
+                video_ids.add(video_id)
 
     if not video_ids:
-        print("No live streams found.")
+        print("No videos found.")
         return []
 
     videos = []
-
     ids = list(video_ids)
+
+    print(f"\nFound {len(ids)} unique videos. Getting statistics...")
 
     for start in range(0, len(ids), 50):
         batch = ids[start:start + 50]
 
         data = youtube_request("videos", {
-            "part": "snippet,liveStreamingDetails,statistics",
+            "part": "snippet,statistics,contentDetails",
             "id": ",".join(batch)
         })
 
         videos.extend(data.get("items", []))
 
     results = []
+    now = datetime.now(timezone.utc)
 
     for video in videos:
-        live = video.get("liveStreamingDetails", {})
+        if not is_relevant(video):
+            continue
+
         snippet = video.get("snippet", {})
         statistics = video.get("statistics", {})
+        content = video.get("contentDetails", {})
 
-        if not live.get("concurrentViewers"):
-            continue
+        published_at = snippet.get("publishedAt", "")
+
+        try:
+            published = datetime.fromisoformat(
+                published_at.replace("Z", "+00:00")
+            )
+            age_hours = max(
+                (now - published).total_seconds() / 3600,
+                1
+            )
+        except (ValueError, TypeError):
+            age_hours = 1
+
+        views = int(statistics.get("viewCount", 0))
+        likes = int(statistics.get("likeCount", 0))
+        comments = int(statistics.get("commentCount", 0))
+
+        views_per_hour = round(views / age_hours, 1)
 
         results.append({
             "title": snippet.get("title", ""),
             "channel": snippet.get("channelTitle", ""),
             "channel_id": snippet.get("channelId", ""),
             "url": f"https://www.youtube.com/watch?v={video['id']}",
-            "viewers": int(live["concurrentViewers"]),
-            "likes": int(statistics.get("likeCount", 0)),
-            "started_at": live.get("actualStartTime", "")
+            "views": views,
+            "likes": likes,
+            "comments": comments,
+            "views_per_hour": views_per_hour,
+            "published_at": published_at,
+            "duration_seconds": parse_duration(
+                content.get("duration", "")
+            ),
+            "description": snippet.get("description", "")[:1500]
         })
 
-    results.sort(key=lambda x: x["viewers"], reverse=True)
+    # Сначала ролики с самой высокой скоростью набора просмотров
+    results.sort(
+        key=lambda x: x["views_per_hour"],
+        reverse=True
+    )
 
     return results
 
 
 def main():
-    streams = find_live_streams()
+    videos = find_videos()
 
     output = {
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "total_streams": len(streams),
-        "streams": streams
+        "total_videos": len(videos),
+        "videos": videos
     }
 
     os.makedirs("results", exist_ok=True)
 
-    with open("results/youtube_streams.json", "w", encoding="utf-8") as file:
+    with open(
+        "results/youtube_streams.json",
+        "w",
+        encoding="utf-8"
+    ) as file:
         json.dump(output, file, ensure_ascii=False, indent=2)
 
-    print(f"\nFound {len(streams)} live streams.")
+    print(f"\nFound {len(videos)} relevant videos.")
 
-    for stream in streams[:10]:
-        print(f"{stream['viewers']} viewers | {stream['title']}")
-        print(stream["url"])
+    for video in videos[:20]:
+        print(
+            f"\n{video['views']:,} views | "
+            f"{video['views_per_hour']} views/hour"
+        )
+        print(video["title"])
+        print(video["url"])
 
 
 if __name__ == "__main__":
