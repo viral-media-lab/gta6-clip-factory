@@ -14,7 +14,6 @@ from gtts import gTTS
 
 ROOT = Path(__file__).parent
 GAME_DIR = ROOT / "assets/game"
-BODYCAM_DIR = ROOT / "assets/bodycam"
 OUTPUT_DIR = ROOT / "output"
 SFX_DIR = ROOT / "assets/sfx"
 MUSIC_DIR = ROOT / "assets/music"
@@ -32,8 +31,6 @@ SCRIPT = [
     "А если нет — получим тот же цирк, только за миллиарды долларов.",
     "ТАК ЧЕГО ХОЧЕШЬ: УМНЫХ КОПОВ ИЛИ ЭТИХ ТУПЫХ МУСОРОВ?!"
 ]
-# Labels drive visual selection. Police footage is never silently substituted with random game footage.
-SCENE_TYPES = ["game", "game", "game", "game", "meme", "police", "police", "game", "meme"]
 
 def run(cmd):
     subprocess.run(cmd, check=True)
@@ -101,20 +98,6 @@ async def make_voice():
     print("Narration provider:", provider)
     return durations
 
-def get_bodycam():
-    exts = {".mp4", ".mov", ".mkv", ".webm", ".ogv"}
-    files = [p for p in BODYCAM_DIR.glob("*") if p.suffix.lower() in exts and p.stat().st_size > 300_000]
-    manifest_path = BODYCAM_DIR / "sources.json"
-    if manifest_path.exists():
-        try:
-            records = json.loads(manifest_path.read_text(encoding="utf-8"))
-            safe = {r.get("file") for r in records if not re.search(r"death|killed|shooting|fatal|murder|gore", (r.get("title","") + " " + r.get("file","")).lower())}
-            files = [p for p in files if p.name in safe]
-        except Exception as exc:
-            print("Bodycam manifest unreadable:", exc)
-            return []
-    return files
-
 def make_music(duration):
     # Original, generated beat: no third-party track or copyright dependency.
     sr = 44100
@@ -155,21 +138,6 @@ def make_music(duration):
     with wave.open(str(out), "wb") as wf:
         wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(sr)
         wf.writeframes((audio * 32767).astype("<i2").tobytes())
-    return out
-
-def make_siren(duration):
-    sr = 44100
-    n = int(duration * sr)
-    t = np.arange(n) / sr
-    sweep = 0.5 + 0.5 * np.sin(2*np.pi*0.75*t)
-    freq = 620 + 520*sweep
-    phase = 2*np.pi*np.cumsum(freq)/sr
-    signal = 0.12 * np.sin(phase) * (0.5 + 0.5*np.sin(2*np.pi*1.5*t))
-    out = OUTPUT_DIR / "siren.wav"
-    import wave
-    with wave.open(str(out), "wb") as wf:
-        wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(sr)
-        wf.writeframes((np.clip(signal,-1,1)*32767).astype("<i2").tobytes())
     return out
 
 def find_font():
@@ -335,20 +303,18 @@ def get_meme_clips():
     return clips
 
 
-def build_montage(durations, police_files=None):
+def build_montage(durations):
     proxy_video, scan_video = prepare_proxy_assets()
     shots = detect_game_shots(scan_video)
     meme_clips = get_meme_clips()
-    police_files = police_files or []
     if len(meme_clips) < 2:
-        raise RuntimeError(f"Only {len(meme_clips)} licensed meme clips found; refusing to render a meme-free Short")
-    if not police_files:
-        raise RuntimeError("No licensed real-life police clips found; refusing to silently replace them with GTA footage")
-    meme_at = {0: 0.85, 3: 0.75, 6: 0.75}
-    police_at = {4: 1.25, 5: 1.10}
-    scenes, shot_cursor, meme_cursor, police_cursor = [], 0, 0, 0
+        raise RuntimeError(f"Only {len(meme_clips)} usable meme clips found; refusing to render a meme-free Short")
 
-    def add_game_segments(phrase_i, total):
+    # Three short absurd cutaways: hook, middle punchline and final escalation.
+    meme_at = {0: 0.85, 3: 0.75, 6: 0.75}
+    scenes, shot_cursor, meme_cursor = [], 0, 0
+
+    def add_game_segments(total):
         nonlocal shot_cursor
         left = total
         while left > 0.025:
@@ -357,40 +323,30 @@ def build_montage(durations, police_files=None):
             cut_dur = min(left, 2.4, max(0.55, src_len - 0.08))
             usable = max(0.0, src_len - cut_dur - 0.08)
             offset = (shot_cursor * 0.37) % max(0.1, usable) if usable > 0.1 else 0.0
-            scenes.append((proxy_video, src_start + offset, cut_dur, "game", phrase_i))
+            scenes.append((proxy_video, src_start + offset, cut_dur, "game"))
             left -= cut_dur
 
     for phrase_i, phrase_dur in enumerate(durations):
-        kind = "meme" if phrase_i in meme_at else ("police" if phrase_i in police_at else None)
-        insert_dur = meme_at.get(phrase_i, police_at.get(phrase_i, 0.0))
-        pool = meme_clips if kind == "meme" else police_files
-        if kind and pool and phrase_dur > insert_dur + 0.65:
+        insert_dur = meme_at.get(phrase_i, 0.0)
+        if insert_dur and phrase_dur > insert_dur + 0.65:
             lead = (phrase_dur - insert_dur) * 0.55
             tail = phrase_dur - insert_dur - lead
-            add_game_segments(phrase_i, lead)
-            if kind == "meme":
-                path, clip_len, title = meme_clips[meme_cursor % len(meme_clips)]
-                meme_cursor += 1
-                print(f"MEME_INSERT line={phrase_i+1} source={title}")
-            else:
-                path = police_files[police_cursor % len(police_files)]
-                police_cursor += 1
-                clip_len = probe_duration(path)
-                print(f"POLICE_INSERT line={phrase_i+1} file={path.name}")
+            add_game_segments(lead)
+            path, clip_len, title = meme_clips[meme_cursor % len(meme_clips)]
+            meme_cursor += 1
+            print(f"MEME_INSERT line={phrase_i+1} source={title}")
             actual_dur = min(insert_dur, max(0.5, clip_len - 0.1))
             usable = max(0.0, clip_len - actual_dur - 0.1)
-            offset = ((meme_cursor + police_cursor) * 1.31) % usable if usable > 0.15 else 0.0
-            scenes.append((path, offset, actual_dur, kind, phrase_i))
-            add_game_segments(phrase_i, tail)
+            offset = (meme_cursor * 1.31) % usable if usable > 0.15 else 0.0
+            scenes.append((path, offset, actual_dur, "meme"))
+            add_game_segments(tail)
         else:
-            add_game_segments(phrase_i, phrase_dur)
+            add_game_segments(phrase_dur)
 
     concat_list = OUTPUT_DIR / "video_parts.txt"
-    timeline, police_marks = 0.0, []
+    timeline = 0.0
     with concat_list.open("w", encoding="utf-8") as listing:
-        for n, (source, start, dur, kind, phrase_i) in enumerate(scenes):
-            if kind == "police":
-                police_marks.append((timeline, timeline + dur))
+        for n, (source, start, dur, kind) in enumerate(scenes):
             out = OUTPUT_DIR / f"cut_{n:03}.mp4"
             vf = ("scale=1080:1920:force_original_aspect_ratio=increase,"
                   "crop=1080:1920,setsar=1,eq=contrast=1.10:saturation=1.12,"
@@ -402,43 +358,38 @@ def build_montage(durations, police_files=None):
             timeline += dur
     run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(concat_list),
          "-c:v","copy",str(OUTPUT_DIR/"video.mp4")])
-    print(f"EDIT_AUDIT: memes={meme_cursor}, police={police_cursor}, police_sfx_marks={len(police_marks)}")
-    if meme_cursor < 2 or police_cursor < 1:
-        raise RuntimeError(f"Edit incomplete: memes={meme_cursor}, police={police_cursor}")
-    return police_marks
+    print(f"EDIT_AUDIT: memes={meme_cursor}, game_segments={len(scenes)-meme_cursor}")
+    if meme_cursor < 2:
+        raise RuntimeError(f"Edit incomplete: only {meme_cursor} meme inserts")
+    return meme_cursor
 
 
 def main():
     random.seed()
-    for folder in (GAME_DIR, BODYCAM_DIR, OUTPUT_DIR, SFX_DIR, MUSIC_DIR):
+    for folder in (GAME_DIR, OUTPUT_DIR, SFX_DIR, MUSIC_DIR):
         folder.mkdir(parents=True, exist_ok=True)
-    print("=== GTA6 SHORT FACTORY / EDITOR V4 ===")
+    print("=== GTA6 SHORT FACTORY / EDITOR V5 — GTA + MEMES ===")
     download_game()
     print("Running meme asset discovery...")
     run(["python", str(ROOT / "meme_finder.py")])
-    print("Running licensed police-footage discovery...")
-    run(["python", str(ROOT / "bodycam_finder.py")])
-    police = get_bodycam()
     memes = get_meme_clips()
-    print(f"ASSET_GATE: memes={len(memes)}, police={len(police)}")
-    if len(memes) < 2 or len(police) < 1:
-        raise RuntimeError("Required edit assets missing; stopping before voice/render instead of producing a fake-complete video")
+    print(f"ASSET_GATE: memes={len(memes)}")
+    if len(memes) < 2:
+        raise RuntimeError("Required meme assets missing; stopping before voice/render")
     durations = asyncio.run(make_voice())
-    police_marks = build_montage(durations, police)
+    meme_inserts = build_montage(durations)
     ass = make_karaoke_ass(durations)
     total = sum(durations)
     music = make_music(total)
-    siren = make_siren(total)
-    siren_enable = "+".join(f"between(t,{a:.2f},{b:.2f})" for a,b in police_marks) or "0"
     run(["ffmpeg","-y","-i",str(OUTPUT_DIR/"video.mp4"),"-i",str(OUTPUT_DIR/"voice.mp3"),
-         "-i",str(music),"-i",str(siren),
+         "-i",str(music),
          "-filter_complex",
-         f"[2:a]volume=0.20,afade=t=in:st=0:d=1,afade=t=out:st={max(0,total-2):.2f}:d=2[m];"
-         f"[3:a]volume=0.62:enable='{siren_enable}'[s];"
-         "[1:a]volume=1.0[v];[m][s][v]amix=inputs=3:duration=first:dropout_transition=2,alimiter=limit=0.95[a]",
+         f"[2:a]volume=0.16,afade=t=in:st=0:d=1,afade=t=out:st={max(0,total-2):.2f}:d=2[m];"
+         "[1:a]volume=1.0[v];[m][v]amix=inputs=2:duration=first:dropout_transition=2,alimiter=limit=0.95[a]",
          "-vf",f"ass={ass.as_posix()}","-map","0:v:0","-map","[a]",
          "-c:v","libx264","-preset","ultrafast","-crf","23","-c:a","aac","-b:a","192k",
          "-shortest","-movflags","+faststart",str(FINAL_VIDEO)])
+    print(f"EDIT_COMPLETE: meme_inserts={meme_inserts}")
     print("DONE:", FINAL_VIDEO)
 
 if __name__ == "__main__":
