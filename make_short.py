@@ -258,13 +258,35 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return path
 
 
+def prepare_proxy_assets():
+    """Decode the huge 4K source once; create a light editing proxy and tiny 1-fps scan."""
+    proxy = OUTPUT_DIR / "gta6_proxy.mp4"
+    scan = OUTPUT_DIR / "gta6_scan.mp4"
+    if proxy.exists() and proxy.stat().st_size > 1_000_000 and scan.exists() and scan.stat().st_size > 10_000:
+        return proxy, scan
+
+    print("Preparing lightweight 12-minute proxy from the 4K source...")
+    run([
+        "ffmpeg", "-y", "-i", str(GAME_VIDEO), "-t", "720",
+        "-filter_complex",
+        "[0:v]split=2[p][s];"
+        "[p]scale=960:540:flags=fast_bilinear,fps=30[proxy];"
+        "[s]fps=1,scale=160:90:flags=fast_bilinear[scan]",
+        "-map", "[proxy]", "-an", "-c:v", "libx264", "-preset", "ultrafast",
+        "-crf", "28", "-threads", "4", str(proxy),
+        "-map", "[scan]", "-an", "-c:v", "libx264", "-preset", "ultrafast",
+        "-crf", "35", "-threads", "2", str(scan)
+    ])
+    print("Proxy ready:", proxy.stat().st_size, "bytes")
+    return proxy, scan
+
+
 def detect_game_shots(video):
-    """Build a deterministic shot library from actual scene changes in the trailer."""
+    """Detect cuts on a 160x90, 1-fps scan instead of decoding 4K frame-by-frame in Python."""
     import cv2
     cap = cv2.VideoCapture(str(video))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    fps = cap.get(cv2.CAP_PROP_FPS) or 1
     total = cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps
-    sample_rate = 4
     previous = None
     cuts = [0.0]
     frame_no = 0
@@ -273,22 +295,21 @@ def detect_game_shots(video):
         if not ok:
             break
         sec = frame_no / fps
-        if frame_no % max(1, int(fps / sample_rate)) == 0:
-            small = cv2.resize(frame, (96, 54))
-            hist = cv2.calcHist([small], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
-            cv2.normalize(hist, hist)
-            if previous is not None:
-                delta = cv2.compareHist(previous, hist, cv2.HISTCMP_BHATTACHARYYA)
-                if delta > 0.38 and sec - cuts[-1] >= 1.15:
-                    cuts.append(sec)
-            previous = hist
+        small = cv2.resize(frame, (96, 54))
+        hist = cv2.calcHist([small], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
+        cv2.normalize(hist, hist)
+        if previous is not None:
+            delta = cv2.compareHist(previous, hist, cv2.HISTCMP_BHATTACHARYYA)
+            if delta > 0.32 and sec - cuts[-1] >= 1.15:
+                cuts.append(sec)
+        previous = hist
         frame_no += 1
     cap.release()
     cuts.append(total)
     shots = [(a, b-a) for a, b in zip(cuts, cuts[1:]) if b-a >= 1.0]
     if not shots:
         shots = [(0.0, max(1.0, total))]
-    print(f"Detected {len(shots)} usable GTA scene segments")
+    print(f"Detected {len(shots)} usable GTA scene segments in {total:.0f}s")
     return shots
 
 def get_meme_clips():
@@ -316,7 +337,8 @@ def get_meme_clips():
 
 def build_montage(durations, police_files=None):
     # Real, openly licensed video inserts; no text cards or fabricated meme templates.
-    shots = detect_game_shots(GAME_VIDEO)
+    proxy_video, scan_video = prepare_proxy_assets()
+    shots = detect_game_shots(scan_video)
     meme_clips = get_meme_clips()
     # Insertions land on the punchline, not randomly between unrelated lines.
     meme_at = {3: 0.62, 4: 0.70, 6: 0.62, 7: 0.68}
@@ -333,7 +355,7 @@ def build_montage(durations, police_files=None):
             cut_dur = min(left, 3.0, max(0.55, src_len - 0.08))
             usable = max(0.0, src_len - cut_dur - 0.08)
             offset = (shot_cursor * 0.37) % max(0.1, usable) if usable > 0.1 else 0.0
-            scenes.append((GAME_VIDEO, src_start + offset, cut_dur, "game", phrase_i))
+            scenes.append((proxy_video, src_start + offset, cut_dur, "game", phrase_i))
             left -= cut_dur
 
     for phrase_i, phrase_dur in enumerate(durations):
