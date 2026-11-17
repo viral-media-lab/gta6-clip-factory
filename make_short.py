@@ -98,7 +98,7 @@ async def make_voice():
 
     durations = [probe_duration(p) for p in paths]
     concat = OUTPUT_DIR / "audio_list.txt"
-    concat.write_text("".join(f"file '{p.as_posix()}'\\n" for p in paths), encoding="utf-8")
+    concat.write_text("".join(f"file '{p.as_posix()}'\n" for p in paths), encoding="utf-8")
     run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat), "-c:a", "libmp3lame", str(OUTPUT_DIR / "voice.mp3")])
     print("Narration provider:", provider)
     return durations
