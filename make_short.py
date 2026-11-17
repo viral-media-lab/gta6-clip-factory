@@ -287,53 +287,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return path
 
 
-def make_meme_visual(index):
-    """Create original lower-internet-style meme inserts; no generic POV template."""
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    img = Image.new("RGB", (W, H), (9, 9, 13))
-    d = ImageDraw.Draw(img)
-    font_path = find_font()
-    def font(size):
-        return ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default()
-
-    palettes = [
-        ((210, 255, 0), (255, 35, 120)),
-        ((0, 245, 255), (255, 255, 255)),
-        ((255, 45, 45), (255, 220, 0)),
-        ((185, 90, 255), (0, 255, 150)),
-    ]
-    acid, second = palettes[index % len(palettes)]
-    # Scanlines, noisy blocks and deliberately over-designed warning labels.
-    for y in range(0, H, 12):
-        d.line((0, y, W, y), fill=(18, 18, 24), width=2)
-    rng = random.Random(900 + index)
-    for _ in range(42):
-        x, y = rng.randint(-80, W-30), rng.randint(0, H-20)
-        ww, hh = rng.randint(20, 180), rng.randint(5, 30)
-        d.rectangle((x, y, x+ww, y+hh), fill=(rng.randint(18,45), rng.randint(18,45), rng.randint(18,45)))
-
-    labels = [
-        ("МАШИНА:", "Я ВСЁ ВИДЕЛА", "СМЕНИЛ ШМОТКИ. ГЕНИЙ."),
-        ("ПЛАН:", "100/100", "РЕАЛИЗАЦИЯ: ОШИБКА 404"),
-        ("МОЗГ:", "НЕ НАЙДЕНО", "IQ.exe НЕ ОТВЕЧАЕТ"),
-        ("FLORIDA", "CORE", "ЭТО УЖЕ НЕ ПОГОНЯ. ЭТО КОНТЕНТ."),
-    ]
-    top, main, footer = labels[index % len(labels)]
-    d.rounded_rectangle((54, 220, W-54, 440), radius=18, fill=(acid), outline=(255,255,255), width=5)
-    d.text((W//2, 330), top, font=font(78), fill=(0,0,0), anchor="mm", stroke_width=1)
-    # Deliberately oversized, slightly crooked headline.
-    d.text((W//2+8, 850+8), main, font=font(112), fill=(0,0,0), anchor="mm", stroke_width=12, stroke_fill=(0,0,0))
-    d.text((W//2, 850), main, font=font(112), fill=second, anchor="mm", stroke_width=5, stroke_fill=(0,0,0))
-    d.rounded_rectangle((80, 1210, W-80, 1500), radius=12, fill=(25,25,32), outline=second, width=7)
-    d.text((W//2, 1350), footer, font=font(43), fill=(255,255,255), anchor="mm", stroke_width=3, stroke_fill=(0,0,0))
-    d.text((W-70, 1760), "LOWER INTERNET // GTA6", font=font(25), fill=acid, anchor="rs")
-    # Fake crash/status strip makes the insert feel like a cursed desktop capture.
-    d.rectangle((0, 0, W, 90), fill=(220, 20, 55))
-    d.text((42, 45), "!!! SYSTEM FAILURE !!!", font=font(34), fill=(255,255,255), anchor="lm")
-    path = OUTPUT_DIR / f"meme_insert_{index}.png"
-    img.save(path)
-    return path
-
 def detect_game_shots(video):
     """Build a deterministic shot library from actual scene changes in the trailer."""
     import cv2
@@ -367,44 +320,67 @@ def detect_game_shots(video):
     print(f"Detected {len(shots)} usable GTA scene segments")
     return shots
 
+def get_meme_clips():
+    folder = ROOT / "assets" / "memes"
+    manifest = folder / "sources.json"
+    if not manifest.exists():
+        return []
+    try:
+        records = json.loads(manifest.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    clips = []
+    for record in records:
+        path = folder / record.get("file", "")
+        if path.exists() and path.stat().st_size > 250_000:
+            try:
+                duration = probe_duration(path)
+                if duration >= 1.0:
+                    clips.append((path, duration, record.get("title", "")))
+            except Exception:
+                pass
+    print(f"Usable absurd/reaction meme clips: {len(clips)}")
+    return clips
+
+
 def build_montage(durations, police_files=None):
-    # Game footage remains the backbone; short original meme inserts land on specific punchlines.
+    # Real, openly licensed video inserts; no text cards or fabricated meme templates.
     shots = detect_game_shots(GAME_VIDEO)
-    meme_at = {
-        3: (0.56, 0),  # "Гениально, Шерлок"
-        4: (0.62, 1),  # "персональный пиздец"
-        6: (0.58, 2),  # "какой же я долбоёб"
-        7: (0.58, 3),  # Florida punchline
-    }
+    meme_clips = get_meme_clips()
+    # Insertions land on the punchline, not randomly between unrelated lines.
+    meme_at = {3: 0.62, 4: 0.70, 6: 0.62, 7: 0.68}
     scenes = []
     shot_cursor = 0
-    for phrase_i, phrase_dur in enumerate(durations):
-        remaining = phrase_dur
-        if phrase_i in meme_at and phrase_dur > 1.35:
-            meme_dur, meme_index = meme_at[phrase_i]
-            # Put the meme after the setup, so it lands as a visual punchline.
-            lead = max(0.35, (phrase_dur - meme_dur) * 0.52)
-            tail = max(0.0, phrase_dur - meme_dur - lead)
-            for segment in (lead,):
-                left = segment
-                while left > 0.02:
-                    src_start, src_len = shots[shot_cursor % len(shots)]
-                    shot_cursor += 1
-                    cut_dur = min(left, 1.55, max(0.35, src_len - 0.08))
-                    usable = max(0.0, src_len - cut_dur - 0.08)
-                    offset = (shot_cursor * 0.37) % max(0.1, usable) if usable > 0.1 else 0.0
-                    scenes.append((GAME_VIDEO, src_start + offset, cut_dur, "game", phrase_i))
-                    left -= cut_dur
-            scenes.append((make_meme_visual(meme_index), 0.0, meme_dur, "meme", phrase_i))
-            remaining = tail
-        while remaining > 0.02:
+    meme_cursor = 0
+
+    def add_game_segments(phrase_i, total):
+        nonlocal shot_cursor
+        left = total
+        while left > 0.025:
             src_start, src_len = shots[shot_cursor % len(shots)]
             shot_cursor += 1
-            cut_dur = min(remaining, 1.55, max(0.35, src_len - 0.08))
+            cut_dur = min(left, 1.55, max(0.35, src_len - 0.08))
             usable = max(0.0, src_len - cut_dur - 0.08)
             offset = (shot_cursor * 0.37) % max(0.1, usable) if usable > 0.1 else 0.0
             scenes.append((GAME_VIDEO, src_start + offset, cut_dur, "game", phrase_i))
-            remaining -= cut_dur
+            left -= cut_dur
+
+    for phrase_i, phrase_dur in enumerate(durations):
+        insert_dur = meme_at.get(phrase_i, 0.0)
+        if meme_clips and insert_dur and phrase_dur > insert_dur + 0.65:
+            lead = (phrase_dur - insert_dur) * 0.56
+            tail = phrase_dur - insert_dur - lead
+            add_game_segments(phrase_i, lead)
+            path, clip_len, title = meme_clips[meme_cursor % len(meme_clips)]
+            meme_cursor += 1
+            # Keep the excerpt short and varied; no clip is repeated until the pool cycles.
+            usable = max(0.0, clip_len - insert_dur - 0.1)
+            meme_start = ((meme_cursor * 1.73) % usable) if usable > 0.15 else 0.0
+            scenes.append((path, meme_start, min(insert_dur, clip_len), "meme", phrase_i))
+            print(f"Meme insert on line {phrase_i+1}: {title}")
+            add_game_segments(phrase_i, tail)
+        else:
+            add_game_segments(phrase_i, phrase_dur)
 
     concat_list = OUTPUT_DIR / "video_parts.txt"
     with concat_list.open("w", encoding="utf-8") as listing:
@@ -412,13 +388,14 @@ def build_montage(durations, police_files=None):
             out = OUTPUT_DIR / f"cut_{n:03}.mp4"
             if kind == "meme":
                 vf = (
-                    "scale=1080:1920,zoompan=z='min(zoom+0.012,1.12)':"
-                    "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x1920:fps=30,"
-                    "eq=contrast=1.18:saturation=1.35,setsar=1,format=yuv420p"
+                    "[0:v]split=2[bg][fg];"
+                    "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+                    "crop=1080:1920,boxblur=24:12,eq=brightness=-0.18:saturation=1.15[back];"
+                    "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[front];"
+                    "[back][front]overlay=(W-w)/2:(H-h)/2,"
+                    "scale=1080:1920,setsar=1,eq=contrast=1.12:saturation=1.25,"
+                    "format=yuv420p"
                 )
-                run(["ffmpeg","-y","-loop","1","-i",str(source),"-t",f"{dur:.3f}",
-                     "-vf",vf,"-r",str(FPS),"-an","-c:v","libx264","-preset","veryfast",
-                     "-pix_fmt","yuv420p",str(out)])
             else:
                 vf = (
                     "[0:v]split=2[bg][fg];"
@@ -429,9 +406,9 @@ def build_montage(durations, police_files=None):
                     "zoompan=z='min(zoom+0.0018,1.075)':d=1:s=1080x1920:fps=30,"
                     "eq=contrast=1.08:saturation=1.14,setsar=1,format=yuv420p"
                 )
-                run(["ffmpeg","-y","-ss",f"{start:.3f}","-i",str(source),"-t",f"{dur:.3f}",
-                     "-filter_complex",vf,"-r",str(FPS),"-an","-c:v","libx264",
-                     "-preset","veryfast","-pix_fmt","yuv420p",str(out)])
+            run(["ffmpeg","-y","-ss",f"{start:.3f}","-i",str(source),"-t",f"{dur:.3f}",
+                 "-filter_complex",vf,"-r",str(FPS),"-an","-c:v","libx264",
+                 "-preset","veryfast","-pix_fmt","yuv420p",str(out)])
             listing.write(f"file '{out.as_posix()}'\n")
     run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(concat_list),
          "-c:v","libx264","-preset","veryfast","-pix_fmt","yuv420p",str(OUTPUT_DIR/"video.mp4")])
