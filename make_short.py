@@ -267,7 +267,7 @@ def prepare_proxy_assets():
 
     print("Preparing lightweight 12-minute proxy from the 4K source...")
     run([
-        "ffmpeg", "-y", "-i", str(GAME_VIDEO), "-t", "720",
+        "ffmpeg", "-y", "-t", "720", "-i", str(GAME_VIDEO),
         "-filter_complex",
         "[0:v]split=2[p][s];"
         "[p]scale=960:540:flags=fast_bilinear,fps=30[proxy];"
