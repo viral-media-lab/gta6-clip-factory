@@ -212,11 +212,17 @@ def make_meme_card(index, text):
     return path
 
 def make_karaoke_ass(durations):
-    # ASS karaoke: each word lights up in sequence, line timings follow actual phrase audio durations.
+    # Short caption beats; punch words get a larger yellow pop instead of flat karaoke.
     path = OUTPUT_DIR / "captions.ass"
+
     def stamp(sec):
         h = int(sec // 3600); m = int((sec % 3600)//60); s = sec % 60
         return f"{h}:{m:02}:{s:05.2f}"
+
+    punch_words = {
+        "БЛЯТЬ", "ИДИОТАМИ", "БОЙНЮ", "НАХУЙ", "ОХУЕННЫЙ",
+        "БЛЯДЬ", "ПИЗДЕЦ", "ДОЛБОЁБА", "ФЛОРИДЫ"
+    }
     header = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -225,7 +231,8 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans,76,&H00FFFFFF,&H0000D7FF,&H00000000,&H99000000,-1,0,1,7,3,2,70,70,300,1
+Style: Default,DejaVu Sans,82,&H00FFFFFF,&H0000D7FF,&H00000000,&H99000000,-1,0,1,8,4,2,64,64,330,1
+Style: Punch,DejaVu Sans,104,&H0000D7FF,&H0000D7FF,&H00000000,&HAA000000,-1,0,1,10,5,2,48,48,330,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -234,21 +241,48 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     lines = [header]
     for phrase, dur in zip(SCRIPT, durations):
         words = phrase.split()
-        # Split into readable chunks of max 5 words; each chunk gets its own karaoke timing.
+        # Break on punch words and punctuation; keep ordinary caption beats to 2–4 words.
         chunks, chunk = [], []
         for word in words:
+            clean = re.sub(r"^[^A-Za-zА-Яа-яЁё]+|[^A-Za-zА-Яа-яЁё]+$", "", word).upper()
+            if clean in punch_words and chunk:
+                chunks.append(chunk)
+                chunk = []
             chunk.append(word)
-            if len(chunk) >= 5:
-                chunks.append(chunk); chunk=[]
-        if chunk: chunks.append(chunk)
-        chunk_dur = dur / max(1, len(chunks))
-        for ci, group in enumerate(chunks):
-            each = max(1, int(chunk_dur * 100 / len(group)))
-            text = " ".join(r"{\k" + str(each) + "}" + w.replace("{","").replace("}","") for w in group)
-            start = now + ci*chunk_dur
-            end = min(now+dur, start+chunk_dur+0.08)
-            lines.append(f"Dialogue: 0,{stamp(start)},{stamp(end)},Default,,0,0,0,,{text}\n")
+            if clean in punch_words or re.search(r"[.!?…,:;]$", word) or len(chunk) >= 4:
+                chunks.append(chunk)
+                chunk = []
+        if chunk:
+            chunks.append(chunk)
+
+        weights = [max(1, len(group) + sum(
+            1.0 for w in group
+            if re.sub(r"^[^A-Za-zА-Яа-яЁё]+|[^A-Za-zА-Яа-яЁё]+$", "", w).upper() in punch_words
+        ) * 1.2) for group in chunks]
+        total_weight = sum(weights) or 1
+        cursor = now
+        for group, weight in zip(chunks, weights):
+            beat_dur = dur * weight / total_weight
+            has_punch = any(
+                re.sub(r"^[^A-Za-zА-Яа-яЁё]+|[^A-Za-zА-Яа-яЁё]+$", "", w).upper() in punch_words
+                for w in group
+            )
+            escaped = []
+            for word in group:
+                safe = word.replace("{", "").replace("}", "")
+                clean = re.sub(r"^[^A-Za-zА-Яа-яЁё]+|[^A-Za-zА-Яа-яЁё]+$", "", word).upper()
+                if clean in punch_words:
+                    escaped.append(r"{\c&H0000D7FF&\fscx118\fscy118}" + safe + r"{\rDefault}")
+                else:
+                    escaped.append(safe)
+            style = "Punch" if has_punch and len(group) == 1 else "Default"
+            lines.append(
+                f"Dialogue: 0,{stamp(cursor)},{stamp(min(now+dur, cursor+beat_dur+0.06))},{style},,0,0,0,,"
+                + " ".join(escaped) + "\n"
+            )
+            cursor += beat_dur
         now += dur
+
     path.write_text("".join(lines), encoding="utf-8")
     return path
 
