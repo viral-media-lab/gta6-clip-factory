@@ -1,0 +1,6 @@
+edge-tts
+Pillow
+numpy
+opencv-python-headless
+yt-dlp
+requests
