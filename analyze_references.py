@@ -37,7 +37,7 @@ for index, url in enumerate(URLS, 1):
     output = VIDEO_DIR / f"ref_{index}.%(ext)s"
     cmd = [
         "yt-dlp", "--no-playlist", "--no-warnings",
-
+        "--extractor-args", "youtube:player_client=android_vr",
         "-f", "best[height<=720]/best",
         "-o", str(output),
     ]
@@ -49,12 +49,12 @@ for index, url in enumerate(URLS, 1):
     print(proc.stdout[-5000:], flush=True)
     if proc.returncode:
         print(proc.stderr[-5000:], flush=True)
-        diagnostic = ["yt-dlp", "--no-warnings", "--list-formats"]
+        diagnostic = ["yt-dlp", "--no-warnings", "--list-formats", "--extractor-args", "youtube:player_client=android_vr"]
         if COOKIE_FILE:
             diagnostic.extend(["--cookies", COOKIE_FILE])
         diagnostic.append(url)
         diag = subprocess.run(diagnostic, text=True, capture_output=True)
-        print("FORMAT DIAGNOSTIC:\\n" + diag.stdout[-7000:] + diag.stderr[-3000:], flush=True)
+        print("ANDROID_VR FORMAT DIAGNOSTIC:\\n" + diag.stdout[-7000:] + diag.stderr[-3000:], flush=True)
         results.append({"index": index, "url": url, "status": "download_failed", "error": proc.stderr[-1800:], "format_diagnostic": (diag.stdout + diag.stderr)[-3000:]})
         continue
 
