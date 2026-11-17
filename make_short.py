@@ -1,14 +1,12 @@
 
 import os
-import re
-import json
 import random
 import asyncio
 import subprocess
-import urllib.request
 from pathlib import Path
 
 import edge_tts
+from gtts import gTTS
 
 ROOT = Path(__file__).parent
 GAME_DIR = ROOT / "assets/game"
@@ -18,10 +16,8 @@ OUTPUT_DIR = ROOT / "output"
 GAME_VIDEO = GAME_DIR / "gta6.mp4"
 FINAL_VIDEO = OUTPUT_DIR / "gta6_short.mp4"
 
-# Прямые источники видео. Если источник недоступен,
-# скрипт попробует следующий.
 GAME_URLS = [
-    "https://media-rockstargames-com.akamaized.net/VI/downloads/videos/GTAVI_An_Extended_Look/GTAVI_An_Extended_Look.mp4",
+    "https://media-rockstargames-com.akamaized.net/VI/downloads/videos/GTAVI_An_Extended_Look/GTAVI_An_Extended_Look.mp4"
 ]
 
 SCRIPT = [
@@ -40,9 +36,10 @@ def run(cmd):
     subprocess.run(cmd, check=True)
 
 def download_file(url, destination):
+    import urllib.request
+
     request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "Mozilla/5.0"}
+        url, headers={"User-Agent": "Mozilla/5.0"}
     )
     with urllib.request.urlopen(request, timeout=90) as response:
         with open(destination, "wb") as output:
@@ -54,6 +51,7 @@ def download_file(url, destination):
 
 def download_game():
     if GAME_VIDEO.exists() and GAME_VIDEO.stat().st_size > 10_000_000:
+        print("Using existing GTA video")
         return
 
     for url in GAME_URLS:
@@ -63,41 +61,52 @@ def download_game():
             if GAME_VIDEO.stat().st_size > 10_000_000:
                 return
         except Exception as error:
-            print("Source failed:", error)
+            print("Download failed:", error)
 
-    raise RuntimeError("Could not download GTA footage.")
-
-def find_bodycam():
-    extensions = {".mp4", ".mov", ".mkv"}
-    return [
-        p for p in BODYCAM_DIR.iterdir()
-        if p.suffix.lower() in extensions
-    ]
+    raise RuntimeError("GTA video download failed")
 
 async def make_voice():
-    AUDIO_DIR = OUTPUT_DIR / "audio"
-    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    audio_dir = OUTPUT_DIR / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
 
     files = []
+
     for i, phrase in enumerate(SCRIPT):
-        path = AUDIO_DIR / f"{i:02}.mp3"
-        voice = edge_tts.Communicate(
-            phrase,
-            "ru-RU-DmitryNeural",
-            rate="+15%",
-            pitch="-8Hz"
-        )
-        await voice.save(str(path))
+        path = audio_dir / f"{i:02}.mp3"
+
+        try:
+            print(f"Edge TTS: phrase {i + 1}")
+            voice = edge_tts.Communicate(
+                phrase,
+                "ru-RU-DmitryNeural",
+                rate="+15%",
+                pitch="-8Hz"
+            )
+            await asyncio.wait_for(voice.save(str(path)), timeout=35)
+
+            if not path.exists() or path.stat().st_size < 1000:
+                raise RuntimeError("Empty Edge TTS audio")
+
+        except Exception as error:
+            print("Edge TTS failed:", error)
+            print("Switching to Google TTS")
+
+            if path.exists():
+                path.unlink()
+
+            gTTS(text=phrase, lang="ru", slow=False).save(str(path))
+
         files.append(path)
 
-    with open(OUTPUT_DIR / "audio_list.txt", "w") as f:
+    concat = OUTPUT_DIR / "audio_list.txt"
+    with open(concat, "w", encoding="utf-8") as f:
         for path in files:
             f.write(f"file '{path.as_posix()}'\n")
 
     run([
         "ffmpeg", "-y",
         "-f", "concat", "-safe", "0",
-        "-i", str(OUTPUT_DIR / "audio_list.txt"),
+        "-i", str(concat),
         "-c:a", "libmp3lame",
         str(OUTPUT_DIR / "voice.mp3")
     ])
@@ -111,41 +120,36 @@ def get_duration(path):
     ])
     return float(result.decode().strip())
 
+def find_bodycam():
+    extensions = {".mp4", ".mov", ".mkv"}
+    return [
+        p for p in BODYCAM_DIR.iterdir()
+        if p.suffix.lower() in extensions
+    ]
+
 def make_video():
     bodycam = find_bodycam()
     source_duration = get_duration(GAME_VIDEO)
     voice_duration = get_duration(OUTPUT_DIR / "voice.mp3")
+    segment = voice_duration / len(SCRIPT)
 
-    # Чередуем игровые сцены и реальные bodycam,
-    # если в папке есть подходящие видео.
     scenes = []
-    scene_count = len(SCRIPT)
-    segment_duration = voice_duration / scene_count
 
-    for i in range(scene_count):
+    for i in range(len(SCRIPT)):
         if bodycam and i in (5, 6):
             scenes.append(random.choice(bodycam))
         else:
             scenes.append(GAME_VIDEO)
 
-    concat_file = OUTPUT_DIR / "scenes.txt"
+    concat = OUTPUT_DIR / "scenes.txt"
 
-    with open(concat_file, "w") as f:
+    with open(concat, "w", encoding="utf-8") as f:
         for i, source in enumerate(scenes):
-            if source == GAME_VIDEO:
-                start = max(
-                    0,
-                    min(
-                        source_duration - segment_duration - 1,
-                        (source_duration - segment_duration) *
-                        i / max(1, scene_count - 1)
-                    )
-                )
-            else:
-                duration = get_duration(source)
-                start = random.uniform(
-                    0, max(0, duration - segment_duration - 0.5)
-                )
+            duration = get_duration(source)
+
+            start = random.uniform(
+                0, max(0, duration - segment - 0.5)
+            )
 
             scene = OUTPUT_DIR / f"scene_{i}.mp4"
 
@@ -153,7 +157,7 @@ def make_video():
                 "ffmpeg", "-y",
                 "-ss", str(start),
                 "-i", str(source),
-                "-t", str(segment_duration),
+                "-t", str(segment),
                 "-vf",
                 "scale=1080:1920:force_original_aspect_ratio=increase,"
                 "crop=1080:1920,setsar=1",
@@ -170,22 +174,22 @@ def make_video():
     run([
         "ffmpeg", "-y",
         "-f", "concat", "-safe", "0",
-        "-i", str(concat_file),
+        "-i", str(concat),
         "-c:v", "libx264",
         "-preset", "veryfast",
         "-pix_fmt", "yuv420p",
         str(OUTPUT_DIR / "video.mp4")
     ])
 
+def stamp(seconds):
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    return f"{h}:{m:02}:{s:05.2f}"
+
 def make_subtitles():
     duration = get_duration(OUTPUT_DIR / "voice.mp3")
     segment = duration / len(SCRIPT)
-
-    def stamp(seconds):
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        seconds = seconds % 60
-        return f"{hours}:{minutes:02}:{seconds:05.2f}"
 
     with open(OUTPUT_DIR / "captions.ass", "w", encoding="utf-8") as f:
         f.write("""[Script Info]
@@ -202,8 +206,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """)
 
         for i, phrase in enumerate(SCRIPT):
-            start = i * segment
-            end = (i + 1) * segment
             words = phrase.split()
             lines = []
             current = ""
@@ -220,9 +222,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             text = r"\N".join(lines)
             text = text.replace("{", r"\{").replace("}", r"\}")
+
             f.write(
-                f"Dialogue: 0,{stamp(start)},{stamp(end)},"
-                f"Default,,0,0,0,,{text}\n"
+                f"Dialogue: 0,{stamp(i * segment)},"
+                f"{stamp((i + 1) * segment)},Default,,0,0,0,,{text}\n"
             )
 
 def main():
@@ -231,6 +234,7 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print("=== GTA 6 CLIP FACTORY ===")
+
     download_game()
     asyncio.run(make_voice())
     make_video()
@@ -257,3 +261,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
