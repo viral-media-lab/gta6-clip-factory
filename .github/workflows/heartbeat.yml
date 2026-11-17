@@ -1,0 +1,17 @@
+
+name: GTA 6 Clip Factory
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start agent
+        run: |
+          echo "GTA 6 CLIP FACTORY IS ALIVE!"
+          echo "Cloud server is working."
+          date -u
