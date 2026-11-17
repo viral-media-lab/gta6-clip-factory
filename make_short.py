@@ -332,7 +332,7 @@ def build_montage(durations, police_files=None):
         while left > 0.025:
             src_start, src_len = shots[shot_cursor % len(shots)]
             shot_cursor += 1
-            cut_dur = min(left, 1.55, max(0.35, src_len - 0.08))
+            cut_dur = min(left, 4.0, max(0.35, src_len - 0.08))
             usable = max(0.0, src_len - cut_dur - 0.08)
             offset = (shot_cursor * 0.37) % max(0.1, usable) if usable > 0.1 else 0.0
             scenes.append((GAME_VIDEO, src_start + offset, cut_dur, "game", phrase_i))
@@ -376,15 +376,14 @@ def build_montage(durations, police_files=None):
                     "crop=1080:1920,boxblur=24:12,eq=brightness=-0.22:saturation=0.85[back];"
                     "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[front];"
                     "[back][front]overlay=(W-w)/2:(H-h)/2,"
-                    "zoompan=z='min(zoom+0.0018,1.075)':d=1:s=1080x1920:fps=30,"
                     "eq=contrast=1.08:saturation=1.14,setsar=1,format=yuv420p"
                 )
             run(["ffmpeg","-y","-ss",f"{start:.3f}","-i",str(source),"-t",f"{dur:.3f}",
                  "-filter_complex",vf,"-r",str(FPS),"-an","-c:v","libx264",
-                 "-preset","veryfast","-pix_fmt","yuv420p",str(out)])
+                 "-preset","ultrafast","-pix_fmt","yuv420p",str(out)])
             listing.write(f"file '{out.as_posix()}'\n")
     run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(concat_list),
-         "-c:v","libx264","-preset","veryfast","-pix_fmt","yuv420p",str(OUTPUT_DIR/"video.mp4")])
+         "-c:v","copy",str(OUTPUT_DIR/"video.mp4")])
 
 
 def main():
@@ -406,7 +405,7 @@ def main():
          f"[2:a]volume=0.20,afade=t=in:st=0:d=1,afade=t=out:st={max(0,total-2):.2f}:d=2[m];"
          "[1:a]volume=1.0[v];[m][v]amix=inputs=2:duration=first:dropout_transition=2,alimiter=limit=0.95[a]",
          "-vf",f"ass={ass.as_posix()}","-map","0:v:0","-map","[a]",
-         "-c:v","libx264","-preset","veryfast","-crf","21","-c:a","aac","-b:a","192k",
+         "-c:v","libx264","-preset","ultrafast","-crf","23","-c:a","aac","-b:a","192k",
          "-shortest","-movflags","+faststart",str(FINAL_VIDEO)])
     print("DONE:", FINAL_VIDEO)
 
