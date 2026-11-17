@@ -252,69 +252,91 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     path.write_text("".join(lines), encoding="utf-8")
     return path
 
-def build_montage(durations, police_files):
-    game_dur = probe_duration(GAME_VIDEO)
+def detect_game_shots(video):
+    """Build a deterministic shot library from actual scene changes in the trailer."""
+    import cv2
+    cap = cv2.VideoCapture(str(video))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    total = cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps
+    sample_rate = 4
+    previous = None
+    cuts = [0.0]
+    frame_no = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        sec = frame_no / fps
+        if frame_no % max(1, int(fps / sample_rate)) == 0:
+            small = cv2.resize(frame, (96, 54))
+            hist = cv2.calcHist([small], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
+            cv2.normalize(hist, hist)
+            if previous is not None:
+                delta = cv2.compareHist(previous, hist, cv2.HISTCMP_BHATTACHARYYA)
+                if delta > 0.38 and sec - cuts[-1] >= 1.15:
+                    cuts.append(sec)
+            previous = hist
+        frame_no += 1
+    cap.release()
+    cuts.append(total)
+    shots = [(a, b-a) for a, b in zip(cuts, cuts[1:]) if b-a >= 1.0]
+    if not shots:
+        shots = [(0.0, max(1.0, total))]
+    print(f"Detected {len(shots)} usable GTA scene segments")
+    return shots
+
+def build_montage(durations, police_files=None):
+    # V3: use a scene-change index, not arbitrary random timestamps.
+    shots = detect_game_shots(GAME_VIDEO)
     scenes = []
-    timeline = 0.0
-    police_cursor = 0
-    for i, phrase in enumerate(SCRIPT):
-        phrase_dur = durations[i]
-        kind = SCENE_TYPES[i]
-        if kind == "police" and police_files:
-            source = police_files[police_cursor % len(police_files)]
-            police_cursor += 1
-            # Divide this sentence into short cuts, all from actual police footage.
-            scene_len = 1.35
-            count = max(1, math.ceil(phrase_dur / scene_len))
-            for j in range(count):
-                dur = min(scene_len, phrase_dur - j*scene_len)
-                srcdur = probe_duration(source)
-                start = (police_cursor*7 + j*3) % max(1, int(max(1, srcdur-dur)))
-                scenes.append((source, start, dur, "police", i))
-        elif kind == "meme":
-            meme_text = "ТВОЙ ПЛАН ПОБЕГА: " + ("ПЕРЕОДЕЛСЯ, НО ЗАБЫЛ ПРО ТАЧКУ" if i == 4 else "ROCKSTAR, НЕ ДЕЛАЙ ИЗ МЕНЯ УГОЛОВНИКА")
-            card = make_meme_card(i, meme_text)
-            scenes.append((card, 0, phrase_dur, "meme", i))
-        else:
-            # Fast random game cuts, 1.1–1.8s, no long static trailer segments.
-            pos = 0.0
-            while pos < phrase_dur:
-                dur = min(random.uniform(1.1, 1.8), phrase_dur-pos)
-                start = random.uniform(0, max(0.1, game_dur-dur-0.1))
-                scenes.append((GAME_VIDEO, start, dur, "game", i))
-                pos += dur
-        timeline += phrase_dur
+    shot_cursor = 0
+    for phrase_i, phrase_dur in enumerate(durations):
+        # New visual beat every ~1.2–1.7 seconds, aligned to narration.
+        remaining = phrase_dur
+        while remaining > 0.02:
+            preferred = min(1.65, max(0.85, remaining))
+            cut_dur = min(remaining, preferred)
+            src_start, src_len = shots[shot_cursor % len(shots)]
+            shot_cursor += 1
+            # Stay inside the detected scene; vary the in-point deterministically.
+            usable = max(0.0, src_len - cut_dur - 0.08)
+            offset = (shot_cursor * 0.37) % max(0.1, usable) if usable > 0.1 else 0.0
+            start = src_start + offset
+            scenes.append((GAME_VIDEO, start, cut_dur, "game", phrase_i))
+            remaining -= cut_dur
 
     concat_list = OUTPUT_DIR / "video_parts.txt"
     with concat_list.open("w", encoding="utf-8") as listing:
         for n, (source, start, dur, kind, phrase_i) in enumerate(scenes):
             out = OUTPUT_DIR / f"cut_{n:03}.mp4"
-            if kind == "meme":
-                run(["ffmpeg","-y","-loop","1","-i",str(source),"-t",f"{dur:.3f}",
-                     "-vf",f"scale={W}:{H},setsar=1,format=yuv420p","-r",str(FPS),
-                     "-an","-c:v","libx264","-preset","veryfast","-pix_fmt","yuv420p",str(out)])
-            else:
-                # Every cut gets a subtle animated push-in; police clips get a punchier crop.
-                zoom = "1.10" if kind == "police" else "1.055"
-                vf = f"scale=1200:2134:force_original_aspect_ratio=increase,crop=1080:1920,zoompan=z='{zoom}':d=1:s=1080x1920:fps={FPS},eq=contrast=1.06:saturation=1.12,setsar=1"
-                run(["ffmpeg","-y","-ss",f"{start:.3f}","-i",str(source),"-t",f"{dur:.3f}",
-                     "-vf",vf,"-r",str(FPS),"-an","-c:v","libx264","-preset","veryfast",
-                     "-pix_fmt","yuv420p",str(out)])
+            # Preserve the full source frame: blurred fill behind a fitted foreground.
+            # This avoids stretching and avoids chopping off the important center of a 16:9 shot.
+            vf = (
+                "[0:v]split=2[bg][fg];"
+                "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+                "crop=1080:1920,boxblur=24:12,eq=brightness=-0.22:saturation=0.85[back];"
+                "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[front];"
+                "[back][front]overlay=(W-w)/2:(H-h)/2,"
+                "zoompan=z='min(zoom+0.0018,1.075)':d=1:s=1080x1920:fps=30,"
+                "eq=contrast=1.08:saturation=1.14,setsar=1,format=yuv420p"
+            )
+            run(["ffmpeg","-y","-ss",f"{start:.3f}","-i",str(source),"-t",f"{dur:.3f}",
+                 "-filter_complex",vf,"-r",str(FPS),"-an","-c:v","libx264",
+                 "-preset","veryfast","-pix_fmt","yuv420p",str(out)])
             listing.write(f"file '{out.as_posix()}'\n")
     run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(concat_list),
          "-c:v","libx264","-preset","veryfast","-pix_fmt","yuv420p",str(OUTPUT_DIR/"video.mp4")])
+
 
 def main():
     random.seed()
     for folder in (GAME_DIR, BODYCAM_DIR, OUTPUT_DIR, SFX_DIR, MUSIC_DIR):
         folder.mkdir(parents=True, exist_ok=True)
-    print("=== GTA6 SHORT FACTORY / EDITOR V2 ===")
+    print("=== GTA6 SHORT FACTORY / EDITOR V3 ===")
     download_game()
     durations = asyncio.run(make_voice())
     police = get_bodycam()
-    if not police:
-        raise RuntimeError("No verified police footage was downloaded. Refusing to publish another GTA-only video. Fix media_finder before retrying.")
-    print(f"Verified police clips available: {len(police)}")
+    print(f"Optional real-life clips available: {len(police)} (not inserted unless explicitly mapped)")
     build_montage(durations, police)
     ass = make_karaoke_ass(durations)
     total = sum(durations)
