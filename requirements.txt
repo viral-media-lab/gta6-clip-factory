@@ -4,3 +4,4 @@ numpy
 opencv-python-headless
 yt-dlp
 requests
+gTTS
