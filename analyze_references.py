@@ -38,9 +38,7 @@ for index, url in enumerate(URLS, 1):
     cmd = [
         "yt-dlp", "--no-playlist", "--no-warnings",
 
-        "-f", "bv*[height<=720]+ba/b[height<=720]",
-        "--merge-output-format", "mp4",
-        "--remux-video", "mp4",
+        "-f", "best[height<=720]/best",
         "-o", str(output),
     ]
     if COOKIE_FILE:
