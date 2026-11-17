@@ -49,7 +49,13 @@ for index, url in enumerate(URLS, 1):
     print(proc.stdout[-5000:], flush=True)
     if proc.returncode:
         print(proc.stderr[-5000:], flush=True)
-        results.append({"index": index, "url": url, "status": "download_failed", "error": proc.stderr[-1800:]})
+        diagnostic = ["yt-dlp", "--no-warnings", "--list-formats"]
+        if COOKIE_FILE:
+            diagnostic.extend(["--cookies", COOKIE_FILE])
+        diagnostic.append(url)
+        diag = subprocess.run(diagnostic, text=True, capture_output=True)
+        print("FORMAT DIAGNOSTIC:\\n" + diag.stdout[-7000:] + diag.stderr[-3000:], flush=True)
+        results.append({"index": index, "url": url, "status": "download_failed", "error": proc.stderr[-1800:], "format_diagnostic": (diag.stdout + diag.stderr)[-3000:]})
         continue
 
     files = list(VIDEO_DIR.glob(f"ref_{index}.*"))
