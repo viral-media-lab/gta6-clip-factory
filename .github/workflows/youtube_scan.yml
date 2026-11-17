@@ -1,0 +1,33 @@
+
+name: YouTube GTA 6 Scanner
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download project
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Scan YouTube streams
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: python youtube_scan.py
+
+      - name: Save scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-streams
+          path: results/youtube_streams.json
+          if-no-files-found: warn
+          retention-days: 7
