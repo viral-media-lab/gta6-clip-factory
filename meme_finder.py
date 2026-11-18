@@ -13,11 +13,18 @@ MAX_BYTES = 45 * 1024 * 1024
 MAX_CLIPS = 8
 S = requests.Session()
 S.headers.update({"User-Agent": "GTA6ClipFactory/3.0 (openly licensed short-form edit assets)"})
+# Current episode theme: wanted-level escalation, pursuit and escape.
+# Broad "funny video" searches produced unrelated dance clips in run #18.
 SEARCHES = [
-    "funny animal video", "surreal video", "unusual animal behavior video",
-    "dancing person video", "goat video", "ostrich running video",
-    "raccoon video", "penguin behavior video", "unexpected funny video",
+    "goose chasing people video", "funny goose chase video",
+    "animal chasing person video", "person running away funny video",
+    "car chase comedy video", "funny vehicle escape video",
+    "hide and seek running away video",
 ]
+RELEVANT_TITLE = re.compile(
+    r"goose|chase|chasing|pursuit|escape|runaway|running away|car|vehicle|hide|hiding",
+    re.I
+)
 BAD = re.compile(r"death|dead|killed|shooting|fatal|murder|suicide|graphic|gore|war crime", re.I)
 EXTS = (".mp4", ".webm", ".ogv", ".mov", ".mkv")
 
@@ -59,7 +66,7 @@ def main():
             continue
         for page in pages:
             title = page.get("title", "")
-            if title in seen or BAD.search(title):
+            if title in seen or BAD.search(title) or not RELEVANT_TITLE.search(title):
                 continue
             seen.add(title)
             info = (page.get("imageinfo") or [{}])[0]
