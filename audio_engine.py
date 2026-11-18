@@ -7,7 +7,6 @@ per line so delivery can be tuned without replacing the editing pipeline.
 import argparse
 import asyncio
 import json
-import math
 import subprocess
 import wave
 from pathlib import Path
@@ -44,6 +43,10 @@ async def synthesize_line(line, path):
     await asyncio.wait_for(tts.save(str(path)), timeout=60)
     if not path.exists() or path.stat().st_size < 1000:
         raise RuntimeError(f"TTS produced an empty line: {path.name}")
+    wav_path = path.with_suffix(".wav")
+    run(["ffmpeg", "-y", "-i", str(path), "-ar", "44100", "-ac", "1", str(wav_path)])
+    path.unlink()
+    return wav_path
 
 def probe_duration(path):
     raw = subprocess.check_output([
@@ -85,9 +88,9 @@ async def build_test():
             voice_parts.append(silence)
             cursor += pause
         mp3 = OUT / f"line_{i:02}.mp3"
-        await synthesize_line(line, mp3)
-        duration = probe_duration(mp3)
-        voice_parts.append(mp3)
+        wav_line = await synthesize_line(line, mp3)
+        duration = probe_duration(wav_line)
+        voice_parts.append(wav_line)
         events.append({"line": i, "start": round(cursor, 3), "duration": round(duration, 3), "delivery": line["delivery"]})
         if line.get("sfx"):
             events.append({"sfx": line["sfx"], "at": round(cursor, 3)})
@@ -99,29 +102,31 @@ async def build_test():
     run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat), "-ar", "44100", "-ac", "2", str(voice)])
 
     total = probe_duration(voice)
-    sfx_inputs = []
-    filters = []
-    for idx, event in enumerate(events):
-        if "sfx" not in event:
-            continue
+    sfx_events = [event for event in events if "sfx" in event]
+    sfx_paths = []
+    for idx, event in enumerate(sfx_events):
         path = OUT / f"sfx_{idx:02}.wav"
         write_sfx(path, event["sfx"])
-        sfx_inputs.extend(["-i", str(path)])
-        delay = int(event["at"] * 1000)
-        filters.append(f"[{idx+1}:a]volume=0.48,adelay={delay}|{delay}[s{idx}]")
+        sfx_paths.append((path, event["at"]))
 
     music = ROOT / "assets" / "music" / "test_bed.mp3"
     inputs = ["-i", str(voice)]
+    filters = []
     if music.exists():
         inputs.extend(["-stream_loop", "-1", "-i", str(music)])
         filters.extend(["[1:a]volume=0.12[bed]", "[0:a][bed]amix=inputs=2:duration=first:dropout_transition=2[base]"])
         base = "[base]"
-        offset = 2
+        next_input = 2
     else:
         base = "[0:a]"
-        offset = 1
-    inputs.extend(sfx_inputs)
-    sfx_labels = [f"[s{i}]" for i in range(len(events)) if "sfx" in events[i]]
+        next_input = 1
+    sfx_labels = []
+    for idx, (path, at) in enumerate(sfx_paths):
+        inputs.extend(["-i", str(path)])
+        delay = int(at * 1000)
+        label = f"[s{idx}]"
+        filters.append(f"[{next_input + idx}:a]volume=0.42,adelay={delay}|{delay}{label}")
+        sfx_labels.append(label)
     if sfx_labels:
         filters.append(base + "".join(sfx_labels) + f"amix=inputs={1+len(sfx_labels)}:duration=first:dropout_transition=0,alimiter=limit=0.95[mix]")
         output_label = "[mix]"
