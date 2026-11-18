@@ -10,20 +10,21 @@ DEST = ROOT / "assets" / "memes"
 MANIFEST = DEST / "sources.json"
 API = "https://commons.wikimedia.org/w/api.php"
 MAX_BYTES = 20 * 1024 * 1024
-MAX_CLIPS = 5
+MAX_CLIPS = 6
 S = requests.Session()
 S.headers.update({"User-Agent": "GTA6ClipFactory/3.0 (openly licensed short-form edit assets)"})
 
 # Current episode theme: wanted-level escalation, pursuit and escape.
 # Broad "funny video" searches produced unrelated dance clips in run #18.
 SEARCHES = [
-    "goose chasing people video", "funny goose chase video",
-    "animal chasing person video", "person running away funny video",
-    "car chase comedy video", "funny vehicle escape video",
-    "hide and seek running away video",
+    "funny animal video", "unusual animal behavior video",
+    "goat video", "ostrich running video", "raccoon video",
+    "penguin behavior video", "goose chase video",
+    "car chase video", "person running away video",
 ]
 RELEVANT_TITLE = re.compile(
-    r"goose|chase|chasing|pursuit|escape|runaway|running away|car|vehicle|hide|hiding",
+    r"goose|chase|chasing|pursuit|escape|run|running|car|vehicle|hide|hiding|"
+    r"raccoon|ostrich|penguin|goat|animal",
     re.I
 )
 BAD = re.compile(r"death|dead|killed|shooting|fatal|murder|suicide|graphic|gore|war crime", re.I)
@@ -114,7 +115,10 @@ def main():
         filename = stem + extension
         path = DEST / filename
         if path.exists() and path.stat().st_size > 250_000:
-            records[filename] = {**item, "file": filename}
+            records[filename] = {
+                **item, "file": filename,
+                "approved_for_edit": bool(records.get(filename, {}).get("approved_for_edit", False))
+            }
             continue
         try:
             print("Downloading relevant meme/reaction clip:", item["title"])
@@ -138,6 +142,7 @@ def main():
                 temporary.replace(path)
             records[filename] = {
                 **item, "file": filename,
+                "approved_for_edit": False,
                 "downloaded_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             }
         except Exception as exc:

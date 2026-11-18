@@ -341,13 +341,17 @@ def get_meme_clips():
         return []
     clips = []
     relevant_title = re.compile(
-        r"goose|chase|chasing|pursuit|escape|runaway|running away|car|vehicle|hide|hiding",
+        r"goose|chase|chasing|pursuit|escape|run|running|car|vehicle|hide|hiding|"
+        r"raccoon|ostrich|penguin|goat|animal",
         re.I
     )
     for record in records:
         title = record.get("title", "")
         if not relevant_title.search(title):
             print(f"Skip unrelated meme asset: {title}")
+            continue
+        if not record.get("approved_for_edit", False):
+            print(f"Skip unreviewed meme candidate: {title}")
             continue
         path = folder / record.get("file", "")
         if path.exists() and path.stat().st_size > 250_000:
