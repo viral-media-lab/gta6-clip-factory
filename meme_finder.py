@@ -48,7 +48,7 @@ YT_QUERIES = (
 
 
 def parse_iso_duration(value):
-    match = re.fullmatch(r"PT(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?", value or "")
+    match = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", value or "")
     if not match:
         return 0
     hours, minutes, seconds = (int(part or 0) for part in match.groups())
