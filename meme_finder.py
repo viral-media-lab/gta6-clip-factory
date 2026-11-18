@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Find short, openly licensed meme/reaction footage for the current episode."""
-import json, re, time, random
+import json, re, time, random, os, subprocess, sys
 from pathlib import Path
 from urllib.parse import quote
 import requests
@@ -35,7 +35,125 @@ BAD = re.compile(
 )
 EXTS = (".mp4", ".webm", ".ogv", ".mov", ".mkv")
 IA_SEARCHES = ("chase", "car", "escape", "runaway", "slapstick", "goose")
+YT_SEARCH = "https://www.googleapis.com/youtube/v3/search"
+YT_VIDEOS = "https://www.googleapis.com/youtube/v3/videos"
+YT_QUERIES = (
+    "funny cartoon chase",
+    "animated car chase",
+    "slapstick chase",
+    "goose chase funny",
+)
 
+
+
+
+def parse_iso_duration(value):
+    match = re.fullmatch(r"PT(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?", value or "")
+    if not match:
+        return 0
+    hours, minutes, seconds = (int(part or 0) for part in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def download_youtube_candidates(records):
+    """Find and download only videos YouTube marks as Creative Commons."""
+    api_key = os.environ.get("YOUTUBE_API_KEY")
+    if not api_key:
+        print("YouTube CC search skipped: YOUTUBE_API_KEY is unavailable")
+        return
+
+    for query in YT_QUERIES:
+        try:
+            response = S.get(YT_SEARCH, params={
+                "part": "snippet",
+                "type": "video",
+                "videoLicense": "creativeCommon",
+                "maxResults": 10,
+                "q": query,
+                "key": api_key
+            }, timeout=30)
+            response.raise_for_status()
+            search_items = response.json().get("items", [])
+            video_ids = [
+                item.get("id", {}).get("videoId")
+                for item in search_items
+                if item.get("id", {}).get("videoId")
+            ]
+            if not video_ids:
+                continue
+
+            details = S.get(YT_VIDEOS, params={
+                "part": "snippet,contentDetails,status",
+                "id": ",".join(video_ids),
+                "key": api_key
+            }, timeout=30)
+            details.raise_for_status()
+            for video in details.json().get("items", []):
+                status = video.get("status", {})
+                if status.get("license") != "creativeCommon":
+                    continue
+                if status.get("privacyStatus") != "public":
+                    continue
+                snippet = video.get("snippet", {})
+                title = clean(snippet.get("title", ""))
+                description = clean(snippet.get("description", ""))
+                if BAD.search(title + " " + description):
+                    continue
+                if not RELEVANT_TITLE.search(title + " " + description):
+                    continue
+                duration = parse_iso_duration(video.get("contentDetails", {}).get("duration", ""))
+                if not 5 <= duration <= 120:
+                    continue
+
+                video_id = video.get("id", "")
+                filename = f"youtube_cc_{video_id}.mp4"
+                path = DEST / filename
+                if path.exists() and path.stat().st_size > 250_000:
+                    records[filename] = {
+                        "source_type": "youtube",
+                        "video_id": video_id,
+                        "title": title,
+                        "file": filename,
+                        "license": "Creative Commons Attribution (YouTube API verified)",
+                        "creator": snippet.get("channelTitle", ""),
+                        "source_page": f"https://www.youtube.com/watch?v={video_id}",
+                        "approved_for_edit": bool(records.get(filename, {}).get("approved_for_edit", False))
+                    }
+                    continue
+
+                try:
+                    print("Downloading YouTube CC candidate:", title)
+                    subprocess.run([
+                        sys.executable, "-m", "yt_dlp",
+                        "--no-warnings", "--no-playlist",
+                        "--format", "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720]",
+                        "--merge-output-format", "mp4",
+                        "--max-filesize", f"{MAX_BYTES // (1024 * 1024)}M",
+                        "--download-sections", "*0:25",
+                        "--force-keyframes-at-cuts",
+                        "--output", str(path),
+                        f"https://www.youtube.com/watch?v={video_id}"
+                    ], check=True, timeout=180)
+                    if not path.exists() or path.stat().st_size < 250_000 or path.stat().st_size > MAX_BYTES:
+                        raise ValueError("downloaded YouTube clip is empty or exceeds size limit")
+                    records[filename] = {
+                        "source_type": "youtube",
+                        "video_id": video_id,
+                        "title": title,
+                        "file": filename,
+                        "license": "Creative Commons Attribution (YouTube API verified)",
+                        "creator": snippet.get("channelTitle", ""),
+                        "source_page": f"https://www.youtube.com/watch?v={video_id}",
+                        "approved_for_edit": False,
+                        "downloaded_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    }
+                except Exception as exc:
+                    path.unlink(missing_ok=True)
+                    print("Skip YouTube CC clip:", title, exc)
+                if len(records) >= MAX_CLIPS:
+                    return
+        except Exception as exc:
+            print("YouTube CC search failed:", query, exc)
 
 
 def search_archive_candidates():
@@ -149,7 +267,8 @@ def main():
         and RELEVANT_TITLE.search(item.get("title", ""))
         and (DEST / item.get("file", "")).exists()
     }
-    # Prefer Archive.org's openly licensed items; use Wikimedia as a secondary source.
+    # Prefer YouTube's API-verified Creative Commons clips, then Archive.org, then Wikimedia.
+    download_youtube_candidates(records)
     for item in search_archive_candidates():
         if len(records) >= MAX_CLIPS:
             break
