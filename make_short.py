@@ -302,7 +302,8 @@ def detect_game_shots(video):
     total = cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps
     previous = None
     # The official trailer opens with age-rating and Rockstar title cards.
-    # Never use those as the opening shot of a Short.\n    cuts = [3.5]
+    # Never use those as the opening shot of a Short.
+    cuts = [3.5]
     frame_no = 0
     while True:
         ok, frame = cap.read()
