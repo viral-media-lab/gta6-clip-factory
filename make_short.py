@@ -3,13 +3,14 @@ import re
 import math
 import json
 import random
-import asyncio
 import subprocess
+import sys
+import wave
 from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-import edge_tts
+from piper import PiperVoice, SynthesisConfig
 
 ROOT = Path(__file__).parent
 GAME_DIR = ROOT / "assets/game"
@@ -66,66 +67,68 @@ def download_game():
             print("Game footage download failed:", exc)
     raise RuntimeError("No GTA VI footage available")
 
-async def make_voice():
+def make_voice():
     """
-    Generate the entire narration with one Edge voice.
-    No provider switching is allowed: any failed line stops the build.
+    Generate every narration line with one local Piper voice.
+    No network TTS fallback or provider switching is allowed.
     """
     audio_dir = OUTPUT_DIR / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
-    paths = [audio_dir / f"{i:02}.mp3" for i in range(len(SCRIPT))]
+    voice_dir = ROOT / "assets" / "voices"
+    voice_dir.mkdir(parents=True, exist_ok=True)
+    model_name = "ru_RU-dmitri-medium"
+    model_path = voice_dir / f"{model_name}.onnx"
+    config_path = voice_dir / f"{model_name}.onnx.json"
+    paths = [audio_dir / f"{i:02}.wav" for i in range(len(SCRIPT))]
     voice_path = OUTPUT_DIR / "voice.mp3"
     concat = OUTPUT_DIR / "audio_list.txt"
     audit_path = OUTPUT_DIR / "audio_audit.json"
-    voice = os.environ.get("EDGE_TTS_VOICE", "ru-RU-DmitryNeural")
 
     # Remove stale files so an earlier successful run cannot mask a failure.
     for path in [*paths, voice_path, concat, audit_path]:
         path.unlink(missing_ok=True)
 
-    async def generate_line(path, phrase):
-        last_error = None
-        for attempt in range(1, 4):
-            try:
-                tts = edge_tts.Communicate(
-                    phrase, voice, rate="+12%", pitch="-5Hz"
-                )
-                await asyncio.wait_for(tts.save(str(path)), timeout=60)
-                if not path.exists() or path.stat().st_size < 1000:
-                    raise RuntimeError("Edge TTS returned an empty audio file")
-                return
-            except Exception as exc:
-                last_error = exc
-                path.unlink(missing_ok=True)
-                print(f"EDGE_TTS_RETRY line={path.stem} attempt={attempt}/3 error={exc}")
-                if attempt < 3:
-                    await asyncio.sleep(2 * attempt)
-        raise RuntimeError(
-            f"Edge TTS failed for line {path.stem} after 3 attempts: {last_error}"
-        )
+    if not model_path.exists() or not config_path.exists():
+        print(f"Downloading licensed Piper voice model: {model_name}")
+        run([
+            sys.executable, "-m", "piper.download_voices", model_name,
+            "--data-dir", str(voice_dir)
+        ])
+    if not model_path.exists() or not config_path.exists():
+        raise RuntimeError(f"Piper voice model is incomplete: {model_name}")
 
     try:
+        voice = PiperVoice.load(str(model_path))
+        syn_config = SynthesisConfig(
+            length_scale=0.92,
+            noise_scale=0.667,
+            noise_w_scale=0.8
+        )
         for path, phrase in zip(paths, SCRIPT):
-            await generate_line(path, phrase)
+            with wave.open(str(path), "wb") as wav_file:
+                voice.synthesize_wav(phrase, wav_file, syn_config=syn_config)
+            if not path.exists() or path.stat().st_size < 1000:
+                raise RuntimeError(f"Piper returned an empty audio file for {path.stem}")
 
         durations = [probe_duration(path) for path in paths]
         if any(duration <= 0.15 for duration in durations):
             raise RuntimeError("One or more narration segments are too short")
 
         concat.write_text(
-            "".join(f"file '{path.as_posix()}'\n" for path in paths),
+            "".join(f"file '{path.as_posix()}'\\n" for path in paths),
             encoding="utf-8"
         )
         run([
             "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat),
-            "-c:a", "libmp3lame", str(voice_path)
+            "-c:a", "libmp3lame", "-q:a", "2", str(voice_path)
         ])
         if not voice_path.exists() or voice_path.stat().st_size < 10_000:
             raise RuntimeError("Concatenated narration is missing or empty")
 
         audit = {
-            "provider": "edge-tts",
-            "voice": voice,
+            "provider": "piper-tts",
+            "voice_model": model_name,
+            "model_license": "MIT",
             "fallback_used": False,
             "line_count": len(paths),
             "line_durations_seconds": [round(value, 3) for value in durations],
@@ -135,7 +138,7 @@ async def make_voice():
             json.dumps(audit, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
-        print(f"NARRATION_PROVIDER: edge-tts ({voice})")
+        print(f"NARRATION_PROVIDER: piper-tts ({model_name})")
         print(f"NARRATION_DURATION: {sum(durations):.2f}s")
         return durations
     except Exception:
@@ -432,7 +435,7 @@ def main():
     if len(memes) < 2:
         raise RuntimeError("Fewer than two relevant meme assets; stopping before voice/game download")
     # Validate one consistent narration voice before downloading large gameplay media.
-    durations = asyncio.run(make_voice())
+    durations = make_voice()
     download_game()
     meme_inserts = build_montage(durations)
     ass = make_karaoke_ass(durations)
