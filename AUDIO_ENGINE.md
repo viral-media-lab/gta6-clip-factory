@@ -33,3 +33,15 @@ Separate narration, music and sound effects into independent layers. This is a p
 Output: `output/audio_test/audio_test.wav` and `audio_audit.json`.
 
 Do not connect this to the full video render until the voice has been listened to and approved. The generated SFX are temporary technical placeholders, not the final sound library.
+
+
+## User quality review — 2026-11-18
+The user listened to the generated preview and rejected it for production:
+- Voice changes between masculine and feminine timbres across lines. This is caused by per-line switching between Edge TTS and gTTS.
+- The masculine Edge TTS line is acceptable as a temporary baseline but does not match the desired reference performance.
+- Procedural impact/whoosh placeholders sound unpleasant and do not match the supplied Shorts references. They must not be used in production.
+- Do not merge this prototype into the main video pipeline in its current form.
+- Next audio iteration must use one consistent voice provider for the entire narration and stop the build if that provider fails. No per-line fallback to a different voice.
+- Replace synthetic placeholder SFX with a reviewed, curated or purpose-generated sound library. Do not add generic effects just to fill gaps.
+- User's reference Shorts: https://www.youtube.com/shorts/7OeyPYZXrMU ; https://www.youtube.com/shorts/aihKKGDlkPk ; https://www.youtube.com/shorts/RmlUANoJlIs ; https://www.youtube.com/shorts/Uwg9AbbtxTY
+- Desired sound direction recorded from prior discussion: lively conversational male Russian narration with energy, emotion, pauses before punchlines and sarcasm; subtle electronic/hip-hop bed; short contextual edit accents (cuts, meme reactions, impacts, whistles, whoosh, glitch and comic accents). Voice stays foreground; music underneath; effects are sparse and purposeful.
