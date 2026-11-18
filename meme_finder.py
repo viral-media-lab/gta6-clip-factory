@@ -19,19 +19,22 @@ S.headers.update({"User-Agent": "GTA6ClipFactory/3.0 (openly licensed short-form
 # Current episode theme: wanted-level escalation, pursuit and escape.
 # Broad "funny video" searches produced unrelated dance clips in run #18.
 SEARCHES = [
-    "funny animal video", "unusual animal behavior video",
-    "goat video", "ostrich running video", "raccoon video",
-    "penguin behavior video", "goose chase video",
-    "car chase video", "person running away video",
+    "car chase video", "goose chase video", "funny chase video",
+    "slapstick chase video", "person running away video",
+    "cartoon chase video", "vehicle escape video",
 ]
 RELEVANT_TITLE = re.compile(
     r"goose|chase|chasing|pursuit|escape|run|running|car|vehicle|hide|hiding|"
-    r"raccoon|ostrich|penguin|goat|animal",
+    r"slapstick|cartoon",
     re.I
 )
-BAD = re.compile(r"death|dead|killed|shooting|fatal|murder|suicide|graphic|gore|war crime", re.I)
+BAD = re.compile(
+    r"death|dead|killed|shooting|fatal|murder|suicide|graphic|gore|war crime|"
+    r"bodycam|body cam|police|cop|officer|arrest|traffic stop|deputy|sheriff",
+    re.I
+)
 EXTS = (".mp4", ".webm", ".ogv", ".mov", ".mkv")
-IA_SEARCHES = ("goat", "raccoon", "chase", "animal", "funny", "escape", "runaway")
+IA_SEARCHES = ("chase", "car", "escape", "runaway", "slapstick", "goose")
 
 
 
@@ -40,7 +43,7 @@ def search_archive_candidates():
     found = []
     seen = set()
     for term in IA_SEARCHES:
-        for license_query in ("licenseurl:http*by*", "licenseurl:http*publicdomain*"):
+        for license_query in ("licenseurl:http*by*",):
             query = f"mediatype:movies AND {license_query} AND title:{term}"
             try:
                 response = S.get(IA_SEARCH, params={
@@ -67,7 +70,7 @@ def search_archive_candidates():
                     metadata = meta_response.json().get("metadata", {})
                     license_name = metadata.get("licenseurl") or doc.get("licenseurl", "")
                     rights = str(metadata.get("rights", ""))
-                    if not license_ok(license_name) and "public domain" not in rights.lower():
+                    if not license_ok(license_name):
                         continue
 
                     title = clean(metadata.get("title") or doc.get("title") or identifier)
@@ -116,8 +119,7 @@ def license_ok(value):
         return False
     return any(x in value for x in (
         "creativecommons.org/licenses/by/", "creativecommons.org/licenses/by-sa/",
-        "creativecommons.org/publicdomain/zero", "creativecommons.org/publicdomain/mark",
-        "cc by 4.0", "cc by-sa", "cc0", "public domain"
+        "creativecommons.org/publicdomain/zero", "cc by 4.0", "cc by-sa", "cc0"
     ))
 
 
