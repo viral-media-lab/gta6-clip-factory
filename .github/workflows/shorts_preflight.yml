@@ -37,14 +37,12 @@ jobs:
       - name: Install preflight dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install piper-tts numpy Pillow requests yt-dlp
+          pip install piper-tts numpy Pillow requests
       - name: Check Python syntax
         run: python -m py_compile make_short.py meme_finder.py voice_preflight.py meme_preflight.py
       - name: Generate narration only
         run: python voice_preflight.py
       - name: Discover and inspect relevant meme candidates
-        env:
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
         run: python meme_preflight.py
       - name: Upload preflight artifacts
         if: always()
