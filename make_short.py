@@ -3,14 +3,14 @@ import re
 import math
 import json
 import random
-import asyncio
 import subprocess
+import sys
+import wave
 from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-import edge_tts
-from gtts import gTTS
+from piper import PiperVoice, SynthesisConfig
 
 ROOT = Path(__file__).parent
 GAME_DIR = ROOT / "assets/game"
@@ -67,36 +67,84 @@ def download_game():
             print("Game footage download failed:", exc)
     raise RuntimeError("No GTA VI footage available")
 
-async def make_voice():
-    # Voice work is deferred; if Edge fails, regenerate EVERY line with one fallback voice.
+def make_voice():
+    """
+    Generate every narration line with one local Piper voice.
+    No network TTS fallback or provider switching is allowed.
+    """
     audio_dir = OUTPUT_DIR / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
-    paths = [audio_dir / f"{i:02}.mp3" for i in range(len(SCRIPT))]
-    provider = "edge"
+    voice_dir = ROOT / "assets" / "voices"
+    voice_dir.mkdir(parents=True, exist_ok=True)
+    model_name = "ru_RU-dmitri-medium"
+    model_path = voice_dir / f"{model_name}.onnx"
+    config_path = voice_dir / f"{model_name}.onnx.json"
+    paths = [audio_dir / f"{i:02}.wav" for i in range(len(SCRIPT))]
+    voice_path = OUTPUT_DIR / "voice.mp3"
+    concat = OUTPUT_DIR / "audio_list.txt"
+    audit_path = OUTPUT_DIR / "audio_audit.json"
 
-    async def generate_edge():
-        for path, phrase in zip(paths, SCRIPT):
-            tts = edge_tts.Communicate(phrase, "ru-RU-DmitryNeural", rate="+15%", pitch="-8Hz")
-            await asyncio.wait_for(tts.save(str(path)), timeout=45)
-            if not path.exists() or path.stat().st_size < 1000:
-                raise RuntimeError("Empty Edge TTS result")
+    # Remove stale files so an earlier successful run cannot mask a failure.
+    for path in [*paths, voice_path, concat, audit_path]:
+        path.unlink(missing_ok=True)
+
+    if not model_path.exists() or not config_path.exists():
+        print(f"Downloading licensed Piper voice model: {model_name}")
+        run([
+            sys.executable, "-m", "piper.download_voices", model_name,
+            "--data-dir", str(voice_dir)
+        ])
+    if not model_path.exists() or not config_path.exists():
+        raise RuntimeError(f"Piper voice model is incomplete: {model_name}")
 
     try:
-        await generate_edge()
-    except Exception as exc:
-        print("Edge TTS unavailable; regenerating the FULL narration with one fallback voice:", exc)
-        provider = "google-fallback"
-        for path in paths:
-            path.unlink(missing_ok=True)
+        voice = PiperVoice.load(str(model_path))
+        syn_config = SynthesisConfig(
+            length_scale=0.92,
+            noise_scale=0.667,
+            noise_w_scale=0.8
+        )
         for path, phrase in zip(paths, SCRIPT):
-            gTTS(text=phrase, lang="ru", slow=False).save(str(path))
+            with wave.open(str(path), "wb") as wav_file:
+                voice.synthesize_wav(phrase, wav_file, syn_config=syn_config)
+            if not path.exists() or path.stat().st_size < 1000:
+                raise RuntimeError(f"Piper returned an empty audio file for {path.stem}")
 
-    durations = [probe_duration(p) for p in paths]
-    concat = OUTPUT_DIR / "audio_list.txt"
-    concat.write_text("".join(f"file '{p.as_posix()}'\n" for p in paths), encoding="utf-8")
-    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat), "-c:a", "libmp3lame", str(OUTPUT_DIR / "voice.mp3")])
-    print("Narration provider:", provider)
-    return durations
+        durations = [probe_duration(path) for path in paths]
+        if any(duration <= 0.15 for duration in durations):
+            raise RuntimeError("One or more narration segments are too short")
+
+        concat.write_text(
+            "".join(f"file '{path.as_posix()}'\n" for path in paths),
+            encoding="utf-8"
+        )
+        run([
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat),
+            "-c:a", "libmp3lame", "-q:a", "2", str(voice_path)
+        ])
+        if not voice_path.exists() or voice_path.stat().st_size < 10_000:
+            raise RuntimeError("Concatenated narration is missing or empty")
+
+        audit = {
+            "provider": "piper-tts",
+            "voice_model": model_name,
+            "model_license": "MIT",
+            "fallback_used": False,
+            "line_count": len(paths),
+            "line_durations_seconds": [round(value, 3) for value in durations],
+            "total_duration_seconds": round(sum(durations), 3)
+        }
+        audit_path.write_text(
+            json.dumps(audit, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+        print(f"NARRATION_PROVIDER: piper-tts ({model_name})")
+        print(f"NARRATION_DURATION: {sum(durations):.2f}s")
+        return durations
+    except Exception:
+        for path in [*paths, voice_path, concat]:
+            path.unlink(missing_ok=True)
+        raise
 
 def make_music(duration):
     # Original, generated beat: no third-party track or copyright dependency.
@@ -256,7 +304,9 @@ def detect_game_shots(video):
     fps = cap.get(cv2.CAP_PROP_FPS) or 1
     total = cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps
     previous = None
-    cuts = [0.0]
+    # The official trailer opens with age-rating and Rockstar title cards.
+    # Never use those as the opening shot of a Short.
+    cuts = [3.5]
     frame_no = 0
     while True:
         ok, frame = cap.read()
@@ -276,7 +326,7 @@ def detect_game_shots(video):
     cuts.append(total)
     shots = [(a, b-a) for a, b in zip(cuts, cuts[1:]) if b-a >= 1.0]
     if not shots:
-        shots = [(0.0, max(1.0, total))]
+        shots = [(3.5, max(1.0, total - 3.5))]
     print(f"Detected {len(shots)} usable GTA scene segments in {total:.0f}s")
     return shots
 
@@ -290,7 +340,19 @@ def get_meme_clips():
     except Exception:
         return []
     clips = []
+    relevant_title = re.compile(
+        r"goose|chase|chasing|pursuit|escape|run|running|car|vehicle|hide|hiding|"
+        r"raccoon|ostrich|penguin|goat|animal",
+        re.I
+    )
     for record in records:
+        title = record.get("title", "")
+        if not relevant_title.search(title):
+            print(f"Skip unrelated meme asset: {title}")
+            continue
+        if not record.get("approved_for_edit", False):
+            print(f"Skip unreviewed meme candidate: {title}")
+            continue
         path = folder / record.get("file", "")
         if path.exists() and path.stat().st_size > 250_000:
             try:
@@ -368,15 +430,17 @@ def main():
     random.seed()
     for folder in (GAME_DIR, OUTPUT_DIR, SFX_DIR, MUSIC_DIR):
         folder.mkdir(parents=True, exist_ok=True)
-    print("=== GTA6 SHORT FACTORY / EDITOR V5 — GTA + MEMES ===")
-    download_game()
-    print("Running meme asset discovery...")
+    print("=== GTA6 SHORT FACTORY / EDITOR V6 — SINGLE-VOICE GATE ===")
+    # Check relevant meme assets first; do not synthesize or download gameplay for a bad edit.
+    print("Running relevant meme asset discovery...")
     run(["python", str(ROOT / "meme_finder.py")])
     memes = get_meme_clips()
-    print(f"ASSET_GATE: memes={len(memes)}")
+    print(f"ASSET_GATE: relevant_memes={len(memes)}")
     if len(memes) < 2:
-        raise RuntimeError("Required meme assets missing; stopping before voice/render")
-    durations = asyncio.run(make_voice())
+        raise RuntimeError("Fewer than two relevant meme assets; stopping before voice/game download")
+    # Validate one consistent narration voice before downloading large gameplay media.
+    durations = make_voice()
+    download_game()
     meme_inserts = build_montage(durations)
     ass = make_karaoke_ass(durations)
     total = sum(durations)

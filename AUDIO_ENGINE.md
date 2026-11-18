@@ -1,23 +1,21 @@
-# Audio engine prototype
+# Audio engine and production voice policy
 
-## Purpose
-Separate narration, music and sound effects into independent layers. This is a prototype and is not yet wired into the full video renderer.
+## Main video renderer
+- The current no-cost candidate is the local Piper voice model `ru_RU-dmitri-medium`.
+- The model is downloaded automatically into `assets/voices`; no account, API key or paid credits are needed.
+- Piper is used as the only narration provider for a complete Short. There is no Edge TTS or Google TTS fallback.
+- `output/audio_audit.json` records provider, model, line count and durations.
+- The model is listed with an MIT license in the Piper voice catalogue. The model is medium quality; naturalness and expressive delivery still need human review.
+- This is not the user's cloned voice and is not yet approved as the final reference-matching voice.
 
-## Voice
-- Edge TTS Russian male voice: ru-RU-DmitryNeural.
-- Each phrase is synthesized separately with delivery presets: excited, angry, sarcastic, deadpan.
-- Rate and pitch vary by delivery. These are expressive presets, not a voice clone.
-- A single provider is used throughout; there is no Google TTS fallback that changes the speaker mid-video.
+## Audio quality gates
+- The voice-only preflight runs without downloading GTA gameplay or rendering a video.
+- Any missing model, failed segment, or invalid audio file stops the build.
+- No procedural placeholder SFX are used in production.
+- The audio prototype's procedural impact/whoosh sounds remain rejected and must not be wired into the renderer.
+- Music and SFX still require a reviewed, context-specific implementation. Do not claim production audio is ready.
 
-## Sound layers
-- Narration is assembled with explicit pauses.
-- Short impact and whoosh placeholders are generated and positioned from event timestamps.
-- Optional licensed music can be supplied as assets/music/test_bed.mp3. No third-party track is downloaded or assumed licensed.
-- When a bed is present, it is mixed quietly under speech. Production ducking and side-chain tuning remain to be completed.
-
-## Test
-Run: python audio_engine.py --test
-
-Output: output/audio_test/audio_test.wav and audio_audit.json.
-
-Do not connect this to the full video render until the audio has been listened to and approved. The generated SFX are temporary technical placeholders, not the final sound library.
+## Test status (2026-11-18)
+- Run #18 used a Google TTS fallback after Edge TTS failed and was rejected.
+- A voice-only preflight on Edge TTS also failed after retries with `No audio was received`.
+- The project is testing Piper as a local, no-key alternative. Do not launch a full video render until the voice sample has been inspected.
