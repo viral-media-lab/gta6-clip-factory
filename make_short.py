@@ -337,7 +337,15 @@ def get_meme_clips():
     except Exception:
         return []
     clips = []
+    relevant_title = re.compile(
+        r"goose|chase|chasing|pursuit|escape|runaway|running away|car|vehicle|hide|hiding",
+        re.I
+    )
     for record in records:
+        title = record.get("title", "")
+        if not relevant_title.search(title):
+            print(f"Skip unrelated meme asset: {title}")
+            continue
         path = folder / record.get("file", "")
         if path.exists() and path.stat().st_size > 250_000:
             try:
