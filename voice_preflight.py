@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Generate and audit narration only. This never renders a video."""
-import asyncio
 import json
 from pathlib import Path
 
@@ -8,10 +7,10 @@ import make_short
 
 
 def main():
-    durations = asyncio.run(make_short.make_voice())
+    durations = make_short.make_voice()
     audit_path = make_short.OUTPUT_DIR / "audio_audit.json"
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
-    if audit.get("provider") != "edge-tts" or audit.get("fallback_used") is not False:
+    if audit.get("provider") != "piper-tts" or audit.get("fallback_used") is not False:
         raise RuntimeError("Voice preflight detected an unexpected provider or fallback")
     if audit.get("line_count") != len(make_short.SCRIPT):
         raise RuntimeError("Not every narration line was generated")
