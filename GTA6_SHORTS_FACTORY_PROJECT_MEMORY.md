@@ -71,7 +71,8 @@ Quality failures:
 - No provider fallback. A voice provider failure must stop the build.
 - Edge TTS returned `No audio was received` in both run #18 and the isolated voice preflight, even after retries.
 - The current no-cost candidate is local Piper `ru_RU-dmitri-medium` (MIT model license), downloaded automatically and used as the only voice for a complete Short.
-- Piper is a medium-quality single-speaker model. It is not the user's cloned voice and is not yet approved as the final reference-matching voice.
+- Voice-only preflight run `44355356909` passed: 7 lines, 28.13 seconds total, one Piper provider, no fallback; MP3 is 22.05 kHz mono and opens correctly.
+- Piper is a medium-quality single-speaker model. Technical synthesis is confirmed, but naturalness/expressiveness have not been approved as matching the user's references. It is not the user's cloned voice.
 - Do not silently switch voices.
 - The user has not supplied a voice sample. Do not claim voice cloning is active.
 - Do not add a paid provider or assume an API key/credits are available without explicit approval.
@@ -96,10 +97,10 @@ Changes made on this branch:
 - PR #3 (https://github.com/viral-media-lab/gta6-clip-factory/pull/3) is the draft PR for the branch above. Do not merge until the checks below pass.
 
 ## 10. Next steps
-1. Complete the Piper voice-only preflight and inspect the resulting WAV/MP3 and audio audit.
-2. Confirm the voice path uses only Piper and that the audit records one provider.
-3. Assess whether the Piper voice is natural enough for the channel; it is a candidate, not an approved final voice.
-4. Check that the meme gate returns at least two genuinely relevant, licensed cutaways. If it does not, keep the build stopped.
+1. Add and run a meme-only preflight to check for at least two relevant, licensed cutaways.
+2. Inspect actual downloaded meme frames; title matching alone is not semantic visual QA.
+3. Assess whether the Piper voice is natural enough for the channel; technical synthesis passed, but the voice is not yet approved as reference-matching.
+4. Keep the full video render blocked until both the voice and meme assets pass review.
 5. Improve the final voice toward the reference style. Do not pay for a provider or assume a secret exists without approval.
 6. Only after voice and meme assets pass review, run one full video build and inspect the MP4 frame-by-frame and by listening.
 
