@@ -10,7 +10,6 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 import edge_tts
-from gtts import gTTS
 
 ROOT = Path(__file__).parent
 GAME_DIR = ROOT / "assets/game"
@@ -68,35 +67,81 @@ def download_game():
     raise RuntimeError("No GTA VI footage available")
 
 async def make_voice():
-    # Voice work is deferred; if Edge fails, regenerate EVERY line with one fallback voice.
+    """
+    Generate the entire narration with one Edge voice.
+    No provider switching is allowed: any failed line stops the build.
+    """
     audio_dir = OUTPUT_DIR / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     paths = [audio_dir / f"{i:02}.mp3" for i in range(len(SCRIPT))]
-    provider = "edge"
+    voice_path = OUTPUT_DIR / "voice.mp3"
+    concat = OUTPUT_DIR / "audio_list.txt"
+    audit_path = OUTPUT_DIR / "audio_audit.json"
+    voice = os.environ.get("EDGE_TTS_VOICE", "ru-RU-DmitryNeural")
 
-    async def generate_edge():
-        for path, phrase in zip(paths, SCRIPT):
-            tts = edge_tts.Communicate(phrase, "ru-RU-DmitryNeural", rate="+15%", pitch="-8Hz")
-            await asyncio.wait_for(tts.save(str(path)), timeout=45)
-            if not path.exists() or path.stat().st_size < 1000:
-                raise RuntimeError("Empty Edge TTS result")
+    # Remove stale files so an earlier successful run cannot mask a failure.
+    for path in [*paths, voice_path, concat, audit_path]:
+        path.unlink(missing_ok=True)
+
+    async def generate_line(path, phrase):
+        last_error = None
+        for attempt in range(1, 4):
+            try:
+                tts = edge_tts.Communicate(
+                    phrase, voice, rate="+12%", pitch="-5Hz"
+                )
+                await asyncio.wait_for(tts.save(str(path)), timeout=60)
+                if not path.exists() or path.stat().st_size < 1000:
+                    raise RuntimeError("Edge TTS returned an empty audio file")
+                return
+            except Exception as exc:
+                last_error = exc
+                path.unlink(missing_ok=True)
+                print(f"EDGE_TTS_RETRY line={path.stem} attempt={attempt}/3 error={exc}")
+                if attempt < 3:
+                    await asyncio.sleep(2 * attempt)
+        raise RuntimeError(
+            f"Edge TTS failed for line {path.stem} after 3 attempts: {last_error}"
+        )
 
     try:
-        await generate_edge()
-    except Exception as exc:
-        print("Edge TTS unavailable; regenerating the FULL narration with one fallback voice:", exc)
-        provider = "google-fallback"
-        for path in paths:
-            path.unlink(missing_ok=True)
         for path, phrase in zip(paths, SCRIPT):
-            gTTS(text=phrase, lang="ru", slow=False).save(str(path))
+            await generate_line(path, phrase)
 
-    durations = [probe_duration(p) for p in paths]
-    concat = OUTPUT_DIR / "audio_list.txt"
-    concat.write_text("".join(f"file '{p.as_posix()}'\n" for p in paths), encoding="utf-8")
-    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat), "-c:a", "libmp3lame", str(OUTPUT_DIR / "voice.mp3")])
-    print("Narration provider:", provider)
-    return durations
+        durations = [probe_duration(path) for path in paths]
+        if any(duration <= 0.15 for duration in durations):
+            raise RuntimeError("One or more narration segments are too short")
+
+        concat.write_text(
+            "".join(f"file '{path.as_posix()}'\\n" for path in paths),
+            encoding="utf-8"
+        )
+        run([
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat),
+            "-c:a", "libmp3lame", str(voice_path)
+        ])
+        if not voice_path.exists() or voice_path.stat().st_size < 10_000:
+            raise RuntimeError("Concatenated narration is missing or empty")
+
+        audit = {
+            "provider": "edge-tts",
+            "voice": voice,
+            "fallback_used": False,
+            "line_count": len(paths),
+            "line_durations_seconds": [round(value, 3) for value in durations],
+            "total_duration_seconds": round(sum(durations), 3)
+        }
+        audit_path.write_text(
+            json.dumps(audit, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+        print(f"NARRATION_PROVIDER: edge-tts ({voice})")
+        print(f"NARRATION_DURATION: {sum(durations):.2f}s")
+        return durations
+    except Exception:
+        for path in [*paths, voice_path, concat]:
+            path.unlink(missing_ok=True)
+        raise
 
 def make_music(duration):
     # Original, generated beat: no third-party track or copyright dependency.
@@ -256,7 +301,7 @@ def detect_game_shots(video):
     fps = cap.get(cv2.CAP_PROP_FPS) or 1
     total = cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps
     previous = None
-    cuts = [0.0]
+    # The official trailer opens with age-rating and Rockstar title cards.\n    # Never use those as the opening shot of a Short.\n    cuts = [3.5]
     frame_no = 0
     while True:
         ok, frame = cap.read()
@@ -368,7 +413,9 @@ def main():
     random.seed()
     for folder in (GAME_DIR, OUTPUT_DIR, SFX_DIR, MUSIC_DIR):
         folder.mkdir(parents=True, exist_ok=True)
-    print("=== GTA6 SHORT FACTORY / EDITOR V5 — GTA + MEMES ===")
+    print("=== GTA6 SHORT FACTORY / EDITOR V6 — SINGLE-VOICE GATE ===")
+    # Validate narration before downloading large media assets or starting the edit.
+    durations = asyncio.run(make_voice())
     download_game()
     print("Running meme asset discovery...")
     run(["python", str(ROOT / "meme_finder.py")])
@@ -376,7 +423,6 @@ def main():
     print(f"ASSET_GATE: memes={len(memes)}")
     if len(memes) < 2:
         raise RuntimeError("Required meme assets missing; stopping before voice/render")
-    durations = asyncio.run(make_voice())
     meme_inserts = build_montage(durations)
     ass = make_karaoke_ass(durations)
     total = sum(durations)
