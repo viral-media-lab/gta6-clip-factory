@@ -118,3 +118,12 @@ Changes made on this branch:
 
 ---
 This document is the current source of truth. Re-check GitHub state at the start of every new work session.
+
+
+## 12. Latest autonomous asset preflight (2026-11-18)
+- Latest run: `44360304967` (branch `fix/single-voice-fail-fast`), completed with failure at the meme approval gate. Python syntax, FFmpeg install, and Piper narration steps passed.
+- Narration artifact: one provider only (`piper-tts / ru_RU-dmitri-medium`), 7 lines, total 28.386 sec, no fallback. This is a technical pass, not user-approved voice quality.
+- Meme artifact `14454150886` inspected. Contact sheet shows six downloaded candidates: unrelated talking-head clip, Wellington cable car, unrelated car-wash/baby-rescue clip, historic driving footage, generic cartoon car chase, and an unrelated animation. Zero approved. Do not use these in the episode.
+- YouTube Creative Commons candidates were discovered by API but downloads failed in GitHub Actions with YouTube's `Sign in to confirm you're not a bot` response. Wikimedia/Archive.org discovery returned unrelated matches. Keep the fail-closed gate.
+- No full render launched. No production MP4 exists from this preflight.
+- Next engineering direction: stop broad keyword scraping and instead build a curated, reusable, licensed reaction/SFX asset library with actual visual review, then map selected clips to script beats. Avoid using baby-rescue, traffic/police footage, unrelated creator commentary, or generic off-topic footage as filler.
