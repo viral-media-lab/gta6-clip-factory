@@ -115,7 +115,7 @@ def make_voice():
             raise RuntimeError("One or more narration segments are too short")
 
         concat.write_text(
-            "".join(f"file '{path.as_posix()}'\\n" for path in paths),
+            "".join(f"file '{path.as_posix()}'\n" for path in paths),
             encoding="utf-8"
         )
         run([
