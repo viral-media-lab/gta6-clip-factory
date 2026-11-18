@@ -31,7 +31,7 @@ RELEVANT_TITLE = re.compile(
 BAD = re.compile(
     r"death|dead|killed|shooting|fatal|murder|suicide|graphic|gore|war crime|"
     r"bodycam|body cam|police|cop|officer|arrest|traffic stop|deputy|sheriff|"
-    r"tom\\s*(and|&)\\s*jerry|cartoon network|sesame street|gumball|"
+    r"tom\s*(and|&)\s*jerry|cartoon network|sesame street|gumball|"
     r"three stooges|benny hill|goat simulator|gran turismo",
     re.I
 )
