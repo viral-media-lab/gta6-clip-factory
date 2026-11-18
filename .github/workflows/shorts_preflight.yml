@@ -30,8 +30,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Verify FFmpeg
-        run: ffmpeg -version
+      - name: Install FFmpeg
+        run: sudo apt-get install -y ffmpeg
       - name: Install preflight dependencies
         run: |
           python -m pip install --upgrade pip
