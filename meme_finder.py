@@ -30,7 +30,9 @@ RELEVANT_TITLE = re.compile(
 )
 BAD = re.compile(
     r"death|dead|killed|shooting|fatal|murder|suicide|graphic|gore|war crime|"
-    r"bodycam|body cam|police|cop|officer|arrest|traffic stop|deputy|sheriff",
+    r"bodycam|body cam|police|cop|officer|arrest|traffic stop|deputy|sheriff|"
+    r"tom\\s*(and|&)\\s*jerry|cartoon network|sesame street|gumball|"
+    r"three stooges|benny hill|goat simulator|gran turismo",
     re.I
 )
 EXTS = (".mp4", ".webm", ".ogv", ".mov", ".mkv")
@@ -62,6 +64,7 @@ def download_youtube_candidates(records):
         print("YouTube CC search skipped: YOUTUBE_API_KEY is unavailable")
         return
 
+    attempted = 0
     for query in YT_QUERIES:
         try:
             response = S.get(YT_SEARCH, params={
@@ -106,6 +109,9 @@ def download_youtube_candidates(records):
                     continue
 
                 video_id = video.get("id", "")
+                attempted += 1
+                if attempted > 8:
+                    return
                 filename = f"youtube_cc_{video_id}.mp4"
                 path = DEST / filename
                 if path.exists() and path.stat().st_size > 250_000:
@@ -129,7 +135,7 @@ def download_youtube_candidates(records):
                         "--format", "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720]",
                         "--merge-output-format", "mp4",
                         "--max-filesize", f"{MAX_BYTES // (1024 * 1024)}M",
-                        "--download-sections", "*0:25",
+                        "--download-sections", "*0-25",
                         "--force-keyframes-at-cuts",
                         "--output", str(path),
                         f"https://www.youtube.com/watch?v={video_id}"
