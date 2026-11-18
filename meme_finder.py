@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Find short, openly licensed absurd/reaction footage for meme cutaways."""
+"""Find short, openly licensed meme/reaction footage for the current episode."""
 import json, re, time, random
 from pathlib import Path
 from urllib.parse import quote
@@ -9,10 +9,11 @@ ROOT = Path(__file__).resolve().parent
 DEST = ROOT / "assets" / "memes"
 MANIFEST = DEST / "sources.json"
 API = "https://commons.wikimedia.org/w/api.php"
-MAX_BYTES = 45 * 1024 * 1024
-MAX_CLIPS = 8
+MAX_BYTES = 20 * 1024 * 1024
+MAX_CLIPS = 5
 S = requests.Session()
 S.headers.update({"User-Agent": "GTA6ClipFactory/3.0 (openly licensed short-form edit assets)"})
+
 # Current episode theme: wanted-level escalation, pursuit and escape.
 # Broad "funny video" searches produced unrelated dance clips in run #18.
 SEARCHES = [
@@ -28,8 +29,10 @@ RELEVANT_TITLE = re.compile(
 BAD = re.compile(r"death|dead|killed|shooting|fatal|murder|suicide|graphic|gore|war crime", re.I)
 EXTS = (".mp4", ".webm", ".ogv", ".mov", ".mkv")
 
+
 def clean(value):
     return re.sub(r"<[^>]*>", "", str(value or "")).strip()
+
 
 def license_ok(value):
     value = (value or "").lower()
@@ -41,28 +44,40 @@ def license_ok(value):
         "cc by 4.0", "cc by-sa", "cc0", "public domain"
     ))
 
+
 def search(term):
-    r = S.get(API, params={
+    response = S.get(API, params={
         "action": "query", "format": "json", "generator": "search",
         "gsrsearch": f"filetype:video {term}", "gsrnamespace": 6, "gsrlimit": 35,
         "prop": "imageinfo", "iiprop": "url|extmetadata|size"
     }, timeout=35)
-    r.raise_for_status()
-    return list(r.json().get("query", {}).get("pages", {}).values())
+    response.raise_for_status()
+    return list(response.json().get("query", {}).get("pages", {}).values())
+
 
 def main():
     DEST.mkdir(parents=True, exist_ok=True)
     old = []
     if MANIFEST.exists():
-        try: old = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        except Exception: pass
-    records = {x.get("file"): x for x in old if x.get("file") and (DEST / x.get("file", "")).exists()}
+        try:
+            old = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    # Keep only previously downloaded assets that still match this episode's theme.
+    records = {
+        item.get("file"): item for item in old
+        if item.get("file")
+        and RELEVANT_TITLE.search(item.get("title", ""))
+        and (DEST / item.get("file", "")).exists()
+    }
     seen, candidates = set(), []
     for term in SEARCHES:
         try:
             pages = search(term)
         except Exception as exc:
             print("Commons search failed:", term, exc)
+            time.sleep(1.2)
             continue
         for page in pages:
             title = page.get("title", "")
@@ -71,48 +86,56 @@ def main():
             seen.add(title)
             info = (page.get("imageinfo") or [{}])[0]
             url = info.get("url", "")
-            meta = info.get("extmetadata", {})
-            lic = clean(meta.get("LicenseUrl", {}).get("value") or meta.get("LicenseShortName", {}).get("value"))
+            metadata = info.get("extmetadata", {})
+            license_name = clean(
+                metadata.get("LicenseUrl", {}).get("value")
+                or metadata.get("LicenseShortName", {}).get("value")
+            )
             size = int(info.get("size", 0) or 0)
-            if not url.lower().split("?")[0].endswith(EXTS) or not license_ok(lic):
+            if not url.lower().split("?")[0].endswith(EXTS) or not license_ok(license_name):
                 continue
             if size and size > MAX_BYTES:
                 continue
             candidates.append({
-                "title": clean(title), "url": url, "license": lic,
-                "creator": clean(meta.get("Artist", {}).get("value", "")),
+                "title": clean(title),
+                "url": url,
+                "license": license_name,
+                "creator": clean(metadata.get("Artist", {}).get("value", "")),
                 "source_page": "https://commons.wikimedia.org/wiki/" + quote(title.replace(" ", "_"))
             })
+        time.sleep(1.2)
+
     random.Random(61).shuffle(candidates)
     for item in candidates:
         if len(records) >= MAX_CLIPS:
             break
         stem = re.sub(r"[^a-zA-Z0-9_-]+", "_", item["title"]).strip("_")[:55] or "odd_clip"
-        ext = Path(item["url"].split("?")[0]).suffix.lower()
-        filename = stem + ext
+        extension = Path(item["url"].split("?")[0]).suffix.lower()
+        filename = stem + extension
         path = DEST / filename
         if path.exists() and path.stat().st_size > 250_000:
+            records[filename] = {**item, "file": filename}
             continue
         try:
-            print("Downloading absurd/reaction clip:", item["title"])
+            print("Downloading relevant meme/reaction clip:", item["title"])
             with S.get(item["url"], stream=True, timeout=(20, 90)) as response:
                 response.raise_for_status()
                 length = int(response.headers.get("Content-Length", "0") or 0)
                 if length and length > MAX_BYTES:
                     continue
                 total = 0
-                tmp = path.with_suffix(path.suffix + ".part")
-                with tmp.open("wb") as out:
+                temporary = path.with_suffix(path.suffix + ".part")
+                with temporary.open("wb") as output:
                     for chunk in response.iter_content(512 * 1024):
                         if not chunk:
                             continue
                         total += len(chunk)
                         if total > MAX_BYTES:
                             raise ValueError("clip exceeds size limit")
-                        out.write(chunk)
+                        output.write(chunk)
                 if total < 250_000:
                     raise ValueError("clip too small")
-                tmp.replace(path)
+                temporary.replace(path)
             records[filename] = {
                 **item, "file": filename,
                 "downloaded_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -121,8 +144,13 @@ def main():
             path.unlink(missing_ok=True)
             path.with_suffix(path.suffix + ".part").unlink(missing_ok=True)
             print("Skip clip:", exc)
-    MANIFEST.write_text(json.dumps(list(records.values()), ensure_ascii=False, indent=2), encoding="utf-8")
-    print("Meme/reaction clips ready:", len(records))
-    # An empty meme pool is not fatal; generation falls back to GTA footage.
+
+    MANIFEST.write_text(
+        json.dumps(list(records.values()), ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    print("Relevant meme/reaction clips ready:", len(records))
+
+
 if __name__ == "__main__":
     main()

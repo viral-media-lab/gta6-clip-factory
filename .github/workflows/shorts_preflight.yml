@@ -1,4 +1,4 @@
-name: Shorts voice preflight
+name: Shorts asset preflight
 
 on:
   push:
@@ -7,17 +7,22 @@ on:
     paths:
       - "make_short.py"
       - "meme_finder.py"
+      - "meme_preflight.py"
       - "requirements.txt"
       - "voice_preflight.py"
       - ".github/workflows/shorts_preflight.yml"
+
+concurrency:
+  group: gta6-short-preflight-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  voice-preflight:
+  asset-preflight:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,22 +34,29 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-      - name: Install voice dependencies
+      - name: Install preflight dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install piper-tts numpy Pillow
+          pip install piper-tts numpy Pillow requests
       - name: Check Python syntax
-        run: python -m py_compile make_short.py meme_finder.py voice_preflight.py
+        run: python -m py_compile make_short.py meme_finder.py voice_preflight.py meme_preflight.py
       - name: Generate narration only
         run: python voice_preflight.py
-      - name: Upload voice preflight artifact
+      - name: Discover and inspect relevant meme candidates
+        run: python meme_preflight.py
+      - name: Upload preflight artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: GTA6-Voice-Preflight
+          name: GTA6-Asset-Preflight
           path: |
             output/voice.mp3
             output/audio_audit.json
             output/audio/*.wav
+            output/meme_contact_sheet.jpg
+            assets/memes/sources.json
+            assets/memes/*.webm
+            assets/memes/*.ogv
+            assets/memes/*.mp4
           if-no-files-found: warn
           retention-days: 7
