@@ -45,6 +45,6 @@ jobs:
           path: |
             output/voice.mp3
             output/audio_audit.json
-            output/audio/*.mp3
+            output/audio/*.wav
           if-no-files-found: warn
           retention-days: 7
