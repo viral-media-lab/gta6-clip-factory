@@ -4,6 +4,13 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths-ignore:
+      - '.github/workflows/make_short.yml'
+      - '.github/workflows/audio_test.yml'
+      - 'audio_engine.py'
+      - 'AUDIO_ENGINE.md'
+      - 'media_finder.py'
+      - 'bodycam_finder.py'
 
 concurrency:
   group: gta6-short-main
