@@ -11,6 +11,7 @@ on:
       - 'AUDIO_ENGINE.md'
       - 'media_finder.py'
       - 'bodycam_finder.py'
+      - 'GTA6_SHORTS_FACTORY_PROJECT_MEMORY.md'
 
 concurrency:
   group: gta6-short-main
