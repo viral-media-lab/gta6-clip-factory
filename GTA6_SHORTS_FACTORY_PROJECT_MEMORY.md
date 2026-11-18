@@ -88,20 +88,19 @@ Changes made on this branch:
 - Narration validation runs before downloading large gameplay media.
 - Gameplay shot selection skips the first 3.5 seconds of the official trailer to avoid its rating/title cards.
 - Meme discovery and insertion now filter titles toward chase/escape/vehicle/hiding relevance; unrelated dance clips are rejected.
-- These changes are not yet merged and have not yet been validated by a new workflow run or a new MP4.
+- PR #3 is open as a draft. These changes are not merged and have not yet been validated by a new workflow run or a new MP4.
 
 ## 9. Open pull requests
 - PR #2 (`Fix audio prototype TTS failures`) remains open and must NOT be merged as-is. It contains a Google fallback and the audio prototype that the user rejected.
-- The new branch above is intended to become a separate review PR after static verification.
+- PR #3 (https://github.com/viral-media-lab/gta6-clip-factory/pull/3) is the draft PR for the branch above. Do not merge until the checks below pass.
 
 ## 10. Next steps
-1. Verify the current branch files and run static/syntax checks.
-2. Open a focused PR for the single-voice fail-fast and relevant-meme gates.
-3. Run only a short narration/preflight test first, not a full video render.
-4. Confirm the voice path does not fall back to Google and that the audit records one provider.
-5. Improve meme discovery so it returns genuinely relevant, licensed cutaways. If fewer than two usable clips exist, stop instead of inserting unrelated footage.
-6. Improve the final voice toward the reference style. Do not pay for a provider or assume a secret exists without approval.
-7. Only after voice and meme assets pass review, run one full video build and inspect the MP4 frame-by-frame and by listening.
+1. Run a full Python syntax check on the current PR branch and inspect the workflow configuration.
+2. Run a short preflight for relevant meme discovery and the single Edge voice; do not launch a full video render.
+3. Confirm the voice path does not fall back to Google and that the audit records one provider.
+4. Check that the meme gate returns at least two genuinely relevant, licensed cutaways. If it does not, keep the build stopped.
+5. Improve the final voice toward the reference style. Do not pay for a provider or assume a secret exists without approval.
+6. Only after voice and meme assets pass review, run one full video build and inspect the MP4 frame-by-frame and by listening.
 
 ## 11. Release checklist
 - MP4 opens, correct 9:16 resolution and expected duration.
