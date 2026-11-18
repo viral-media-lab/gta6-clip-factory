@@ -424,15 +424,16 @@ def main():
     for folder in (GAME_DIR, OUTPUT_DIR, SFX_DIR, MUSIC_DIR):
         folder.mkdir(parents=True, exist_ok=True)
     print("=== GTA6 SHORT FACTORY / EDITOR V6 — SINGLE-VOICE GATE ===")
-    # Validate narration before downloading large media assets or starting the edit.
-    durations = asyncio.run(make_voice())
-    download_game()
-    print("Running meme asset discovery...")
+    # Check relevant meme assets first; do not synthesize or download gameplay for a bad edit.
+    print("Running relevant meme asset discovery...")
     run(["python", str(ROOT / "meme_finder.py")])
     memes = get_meme_clips()
-    print(f"ASSET_GATE: memes={len(memes)}")
+    print(f"ASSET_GATE: relevant_memes={len(memes)}")
     if len(memes) < 2:
-        raise RuntimeError("Required meme assets missing; stopping before voice/render")
+        raise RuntimeError("Fewer than two relevant meme assets; stopping before voice/game download")
+    # Validate one consistent narration voice before downloading large gameplay media.
+    durations = asyncio.run(make_voice())
+    download_game()
     meme_inserts = build_montage(durations)
     ass = make_karaoke_ass(durations)
     total = sum(durations)
