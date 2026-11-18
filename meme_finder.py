@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parent
 DEST = ROOT / "assets" / "memes"
 MANIFEST = DEST / "sources.json"
 API = "https://commons.wikimedia.org/w/api.php"
+IA_SEARCH = "https://archive.org/advancedsearch.php"
+IA_METADATA = "https://archive.org/metadata"
 MAX_BYTES = 20 * 1024 * 1024
 MAX_CLIPS = 6
 S = requests.Session()
@@ -29,6 +31,79 @@ RELEVANT_TITLE = re.compile(
 )
 BAD = re.compile(r"death|dead|killed|shooting|fatal|murder|suicide|graphic|gore|war crime", re.I)
 EXTS = (".mp4", ".webm", ".ogv", ".mov", ".mkv")
+IA_SEARCHES = ("goat", "raccoon", "chase", "animal", "funny", "escape", "runaway")
+
+
+
+def search_archive_candidates():
+    """Find openly licensed movie items on Internet Archive; no API key is required."""
+    found = []
+    seen = set()
+    for term in IA_SEARCHES:
+        for license_query in ("licenseurl:http*by*", "licenseurl:http*publicdomain*"):
+            query = f"mediatype:movies AND {license_query} AND title:{term}"
+            try:
+                response = S.get(IA_SEARCH, params={
+                    "q": query,
+                    "fl[]": ["identifier", "title", "licenseurl"],
+                    "rows": 15,
+                    "page": 1,
+                    "output": "json"
+                }, timeout=30)
+                response.raise_for_status()
+                docs = response.json().get("response", {}).get("docs", [])
+            except Exception as exc:
+                print("Archive.org search failed:", term, exc)
+                continue
+
+            for doc in docs:
+                identifier = doc.get("identifier", "")
+                if not identifier or identifier in seen:
+                    continue
+                seen.add(identifier)
+                try:
+                    meta_response = S.get(f"{IA_METADATA}/{identifier}", timeout=30)
+                    meta_response.raise_for_status()
+                    metadata = meta_response.json().get("metadata", {})
+                    license_name = metadata.get("licenseurl") or doc.get("licenseurl", "")
+                    rights = str(metadata.get("rights", ""))
+                    if not license_ok(license_name) and "public domain" not in rights.lower():
+                        continue
+
+                    title = clean(metadata.get("title") or doc.get("title") or identifier)
+                    if BAD.search(title) or not RELEVANT_TITLE.search(title):
+                        continue
+
+                    files = []
+                    for item in meta_response.json().get("files", []):
+                        name = item.get("name", "")
+                        if not name.lower().endswith(EXTS):
+                            continue
+                        if item.get("private") == "true":
+                            continue
+                        size = int(item.get("size", 0) or 0)
+                        if size and size > MAX_BYTES:
+                            continue
+                        files.append((size or MAX_BYTES, name))
+                    if not files:
+                        continue
+                    files.sort(key=lambda entry: entry[0])
+                    size, filename = files[0]
+                    found.append({
+                        "source_type": "archive.org",
+                        "identifier": identifier,
+                        "title": title,
+                        "filename": filename,
+                        "size": size,
+                        "license": license_name or "Public domain (rights statement)",
+                        "creator": clean(metadata.get("creator", "")),
+                        "source_page": f"https://archive.org/details/{identifier}",
+                        "url": f"https://archive.org/download/{identifier}/{quote(filename)}"
+                    })
+                except Exception as exc:
+                    print("Archive.org metadata failed:", identifier, exc)
+            time.sleep(0.5)
+    return found
 
 
 def clean(value):
@@ -72,6 +147,47 @@ def main():
         and RELEVANT_TITLE.search(item.get("title", ""))
         and (DEST / item.get("file", "")).exists()
     }
+    # Prefer Archive.org's openly licensed items; use Wikimedia as a secondary source.
+    for item in search_archive_candidates():
+        if len(records) >= MAX_CLIPS:
+            break
+        stem = re.sub(r"[^a-zA-Z0-9_-]+", "_", item["identifier"] + "_" + item["filename"]).strip("_")[:90]
+        extension = Path(item["filename"]).suffix.lower()
+        filename = stem + extension
+        path = DEST / filename
+        if path.exists() and path.stat().st_size > 250_000:
+            records[filename] = {
+                **item, "file": filename,
+                "approved_for_edit": bool(records.get(filename, {}).get("approved_for_edit", False))
+            }
+            continue
+        try:
+            print("Downloading Archive.org candidate:", item["title"])
+            with S.get(item["url"], stream=True, timeout=(20, 120)) as response:
+                response.raise_for_status()
+                total = 0
+                temporary = path.with_suffix(path.suffix + ".part")
+                with temporary.open("wb") as output:
+                    for chunk in response.iter_content(512 * 1024):
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if total > MAX_BYTES:
+                            raise ValueError("clip exceeds size limit")
+                        output.write(chunk)
+                if total < 250_000:
+                    raise ValueError("clip too small")
+                temporary.replace(path)
+            records[filename] = {
+                **item, "file": filename, "size": total,
+                "approved_for_edit": False,
+                "downloaded_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            }
+        except Exception as exc:
+            path.unlink(missing_ok=True)
+            path.with_suffix(path.suffix + ".part").unlink(missing_ok=True)
+            print("Skip Archive.org clip:", exc)
+
     seen, candidates = set(), []
     for term in SEARCHES:
         try:
