@@ -113,7 +113,7 @@ async def make_voice():
             raise RuntimeError("One or more narration segments are too short")
 
         concat.write_text(
-            "".join(f"file '{path.as_posix()}'\\n" for path in paths),
+            "".join(f"file '{path.as_posix()}'\n" for path in paths),
             encoding="utf-8"
         )
         run([
@@ -301,7 +301,8 @@ def detect_game_shots(video):
     fps = cap.get(cv2.CAP_PROP_FPS) or 1
     total = cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps
     previous = None
-    # The official trailer opens with age-rating and Rockstar title cards.\n    # Never use those as the opening shot of a Short.\n    cuts = [3.5]
+    # The official trailer opens with age-rating and Rockstar title cards.
+    # Never use those as the opening shot of a Short.\n    cuts = [3.5]
     frame_no = 0
     while True:
         ok, frame = cap.read()
@@ -321,7 +322,7 @@ def detect_game_shots(video):
     cuts.append(total)
     shots = [(a, b-a) for a, b in zip(cuts, cuts[1:]) if b-a >= 1.0]
     if not shots:
-        shots = [(0.0, max(1.0, total))]
+        shots = [(3.5, max(1.0, total - 3.5))]
     print(f"Detected {len(shots)} usable GTA scene segments in {total:.0f}s")
     return shots
 
